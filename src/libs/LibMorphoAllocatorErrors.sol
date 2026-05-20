@@ -26,6 +26,12 @@ library LibMorphoAllocatorErrors {
   /// @param actual Amount actually credited to the intent.
   error SlippageExceeded(uint256 minOut, uint256 actual);
 
+  /// @notice Thrown when the intent's collateral balance decreased across an unlock.
+  /// @param intentId      The intent ID.
+  /// @param balanceBefore The balance before unlock.
+  /// @param balanceAfter  The balance after unlock.
+  error UnlockBalanceDecreased(uint256 intentId, uint256 balanceBefore, uint256 balanceAfter);
+
   /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
   /*                       ASSET VALIDATION                     */
   /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
@@ -34,4 +40,17 @@ library LibMorphoAllocatorErrors {
   /// @param intentId  The intent ID.
   /// @param useTarget True if the target asset was selected, false if the deposit asset.
   error TargetNotPositionManager(uint256 intentId, bool useTarget);
+
+  /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
+  /*                       INITIALIZATION                       */
+  /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
+
+  /// @notice Thrown when the owner address is zero during initialization.
+  error OwnerZeroAddress();
+
+  /// @notice Thrown when the Facility address has no code during initialization.
+  error FacilityNotContract();
+
+  /// @notice Thrown when the Morpho Vault address has no code during initialization.
+  error MorphoVaultNotContract();
 }

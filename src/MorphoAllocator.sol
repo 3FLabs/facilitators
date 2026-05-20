@@ -59,6 +59,10 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable {
   {
     _initializeOwner(owner_);
 
+    require(owner_ != address(0), LibMorphoAllocatorErrors.OwnerZeroAddress());
+    require(address(facility_).code.length > 0, LibMorphoAllocatorErrors.FacilityNotContract());
+    require(address(morphoVault_).code.length > 0, LibMorphoAllocatorErrors.MorphoVaultNotContract());
+
     MorphoAllocatorStorageData storage $ = LibStorage.allocatorStorage();
     $.facility = facility_;
     $.morphoVault = morphoVault_;
@@ -161,12 +165,11 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable {
 
     _facility.unlock(intentId);
 
-    uint256 unlocked;
-    unchecked {
-      // balanceAfter >= balanceBefore: unlock can only credit collateral to the intent,
-      // never debit, so the subtraction never underflows.
-      unlocked = _intentBalanceOf(_facility, intentId, collateralAsset) - balanceBefore;
+    uint256 balanceAfter = _intentBalanceOf(_facility, intentId, collateralAsset);
+    if (balanceAfter < balanceBefore) {
+      revert LibMorphoAllocatorErrors.UnlockBalanceDecreased(intentId, balanceBefore, balanceAfter);
     }
+    uint256 unlocked = balanceAfter - balanceBefore;
     if (unlocked < minSharesUnlocked) revert LibMorphoAllocatorErrors.SlippageExceeded(minSharesUnlocked, unlocked);
 
     if (allocateAmount > 0) {
