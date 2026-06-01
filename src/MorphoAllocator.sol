@@ -12,8 +12,6 @@ import {Mode} from "@grunt/libs/funds/Order.sol";
 import {IVaultV2} from "@vault-v2/interfaces/IVaultV2.sol";
 
 import {IMorphoAllocator, Phase, PendingWorkflow} from "./interfaces/IMorphoAllocator.sol";
-import {LibStorage, MorphoAllocatorStorageData} from "./libs/LibStorage.sol";
-import {LibMorphoAllocatorErrors} from "./libs/LibMorphoAllocatorErrors.sol";
 
 /// @title MorphoAllocator
 /// @author 3F Protocol
@@ -25,14 +23,69 @@ import {LibMorphoAllocatorErrors} from "./libs/LibMorphoAllocatorErrors.sol";
 ///      storage. Per-intent state guards Phase 2 behind Phase 1 and locks in the adapter/data
 ///      chosen at Phase 1 so the executor cannot retarget allocation between phases.
 contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable {
-  using LibStorage for MorphoAllocatorStorageData;
-
   /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
   /*                           ROLES                            */
   /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
 
   /// @notice Role for addresses authorized to trigger workflow phases.
   uint256 internal constant EXECUTOR_ROLE = _ROLE_0;
+
+  /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
+  /*                          STORAGE                           */
+  /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
+
+  /// @dev Storage slot for the MorphoAllocator's namespaced storage struct.
+  ///      Computed as `keccak256(abi.encode(uint256(keccak256("morpho_allocator")) - 1)) & ~bytes32(uint256(0xff))`.
+  ///      Follows the ERC-7201 namespaced storage pattern to prevent storage collisions in proxies
+  ///      and inheritance hierarchies.
+  bytes32 private constant STORAGE_SLOT = 0x14521fccd051e83be9d169ec3fd9a9c40aeae5d721183d031a3f782c79172800;
+  
+  /// @notice Storage struct containing all persistent state for the MorphoAllocator contract.
+  /// @dev Uses ERC-7201 namespaced storage for proxy compatibility. All fields are grouped
+  ///      and accessed via a fixed storage slot to prevent collisions with inherited contracts.
+  /// @param facility    The Grunt Facility this allocator is a facilitator on.
+  /// @param morphoVault The Morpho Vault V2 this allocator can reallocate.
+  /// @param workflows   Per-intent workflow state.
+  struct MorphoAllocatorStorageData {
+    IFacility facility;
+    IVaultV2 morphoVault;
+    mapping(uint256 intentId => PendingWorkflow) workflows;
+  }
+
+  /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
+  /*                           ERRORS                           */
+  /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
+
+  /// @notice Thrown when an intent's workflow is not in the required phase.
+  /// @param intentId The intent ID.
+  /// @param expected The phase the call requires.
+  /// @param actual   The phase currently stored.
+  error InvalidPhase(uint256 intentId, Phase expected, Phase actual);
+
+  /// @notice Thrown when the amount credited to the intent on unlock is below the executor minimum.
+  /// @param minOut Minimum expected amount.
+  /// @param actual Amount actually credited to the intent.
+  error SlippageExceeded(uint256 minOut, uint256 actual);
+
+  /// @notice Thrown when the intent's collateral balance decreased across an unlock.
+  /// @param intentId      The intent ID.
+  /// @param balanceBefore The balance before unlock.
+  /// @param balanceAfter  The balance after unlock.
+  error UnlockBalanceDecreased(uint256 intentId, uint256 balanceBefore, uint256 balanceAfter);
+
+  /// @notice Thrown when the selected asset is not a position manager.
+  /// @param intentId  The intent ID.
+  /// @param useTarget True if the target asset was selected, false if the deposit asset.
+  error TargetNotPositionManager(uint256 intentId, bool useTarget);
+
+  /// @notice Thrown when the owner address is zero during initialization.
+  error OwnerZeroAddress();
+
+  /// @notice Thrown when the Facility address has no code during initialization.
+  error FacilityNotContract();
+
+  /// @notice Thrown when the Morpho Vault address has no code during initialization.
+  error MorphoVaultNotContract();
 
   /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
   /*                       INITIALIZATION                       */
@@ -59,11 +112,11 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable {
   {
     _initializeOwner(owner_);
 
-    require(owner_ != address(0), LibMorphoAllocatorErrors.OwnerZeroAddress());
-    require(address(facility_).code.length > 0, LibMorphoAllocatorErrors.FacilityNotContract());
-    require(address(morphoVault_).code.length > 0, LibMorphoAllocatorErrors.MorphoVaultNotContract());
+    require(owner_ != address(0), OwnerZeroAddress());
+    require(address(facility_).code.length > 0, FacilityNotContract());
+    require(address(morphoVault_).code.length > 0, MorphoVaultNotContract());
 
-    MorphoAllocatorStorageData storage $ = LibStorage.allocatorStorage();
+    MorphoAllocatorStorageData storage $ = _allocatorStorage();
     $.facility = facility_;
     $.morphoVault = morphoVault_;
 
@@ -79,19 +132,19 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable {
 
   /// @inheritdoc IMorphoAllocator
   function workflow(uint256 intentId) external view override returns (PendingWorkflow memory) {
-    return LibStorage.allocatorStorage().workflows[intentId];
+    return _allocatorStorage().workflows[intentId];
   }
 
   /// @notice Returns the configured Facility address.
   /// @return The Grunt Facility this allocator coordinates.
   function facility() external view returns (IFacility) {
-    return LibStorage.allocatorStorage().facility;
+    return _allocatorStorage().facility;
   }
 
   /// @notice Returns the configured Morpho Vault V2 address.
   /// @return The Morpho Vault V2 this allocator allocates through.
   function morphoVault() external view returns (IVaultV2) {
-    return LibStorage.allocatorStorage().morphoVault;
+    return _allocatorStorage().morphoVault;
   }
 
   /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
@@ -108,9 +161,9 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable {
     address adapter,
     bytes calldata adapterData
   ) external override onlyRoles(EXECUTOR_ROLE) {
-    MorphoAllocatorStorageData storage $ = LibStorage.allocatorStorage();
+    MorphoAllocatorStorageData storage $ = _allocatorStorage();
     PendingWorkflow storage wf = $.workflows[intentId];
-    if (wf.phase != Phase.IDLE) revert LibMorphoAllocatorErrors.InvalidPhase(intentId, Phase.IDLE, wf.phase);
+    if (wf.phase != Phase.IDLE) revert InvalidPhase(intentId, Phase.IDLE, wf.phase);
 
     IFacility _facility = $.facility;
     _facility.pull(intentId, pullAmount);
@@ -139,15 +192,15 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable {
     bool useTarget,
     uint256 minSharesUnlocked
   ) external override onlyRoles(EXECUTOR_ROLE) {
-    MorphoAllocatorStorageData storage $ = LibStorage.allocatorStorage();
+    MorphoAllocatorStorageData storage $ = _allocatorStorage();
     PendingWorkflow memory wf = $.workflows[intentId];
-    if (wf.phase != Phase.COMMITTED) revert LibMorphoAllocatorErrors.InvalidPhase(intentId, Phase.COMMITTED, wf.phase);
+    if (wf.phase != Phase.COMMITTED) revert InvalidPhase(intentId, Phase.COMMITTED, wf.phase);
 
     IFacility _facility = $.facility;
 
     (IntentProperties memory props,,,) = _facility.getIntent(intentId);
     Asset memory pmAsset = useTarget ? props.targetAsset : props.depositAsset;
-    if (!pmAsset.isPositionManager) revert LibMorphoAllocatorErrors.TargetNotPositionManager(intentId, useTarget);
+    if (!pmAsset.isPositionManager) revert TargetNotPositionManager(intentId, useTarget);
 
     (address collateralAsset,) = IPositionManager(pmAsset.asset).assets();
     uint256 balanceBefore = _intentBalanceOf(_facility, intentId, collateralAsset);
@@ -156,10 +209,10 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable {
 
     uint256 balanceAfter = _intentBalanceOf(_facility, intentId, collateralAsset);
     if (balanceAfter < balanceBefore) {
-      revert LibMorphoAllocatorErrors.UnlockBalanceDecreased(intentId, balanceBefore, balanceAfter);
+      revert UnlockBalanceDecreased(intentId, balanceBefore, balanceAfter);
     }
     uint256 unlocked = balanceAfter - balanceBefore;
-    if (unlocked < minSharesUnlocked) revert LibMorphoAllocatorErrors.SlippageExceeded(minSharesUnlocked, unlocked);
+    if (unlocked < minSharesUnlocked) revert SlippageExceeded(minSharesUnlocked, unlocked);
 
     if (allocateAmount > 0) {
       $.morphoVault.allocate(wf.adapter, wf.adapterData, allocateAmount);
@@ -174,6 +227,16 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable {
   /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
   /*                         INTERNALS                          */
   /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
+
+  /// @dev Returns a reference to the contract's namespaced storage struct.
+  ///      Loads the storage pointer from the fixed `STORAGE_SLOT`, ensuring a consistent
+  ///      storage layout when used behind proxies.
+  /// @return data A storage pointer to the `MorphoAllocatorStorageData` struct.
+  function _allocatorStorage() private pure returns (MorphoAllocatorStorageData storage data) {
+    assembly ("memory-safe") {
+      data.slot := STORAGE_SLOT
+    }
+  }
 
   /// @dev Reads an intent's balance for a specific token by iterating `intentBalances`.
   ///      Reading `IERC20.balanceOf(facility)` would aggregate across all intents and be wrong;

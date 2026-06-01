@@ -13,7 +13,6 @@ import {IVaultV2} from "@vault-v2/interfaces/IVaultV2.sol";
 
 import {MorphoAllocator} from "src/MorphoAllocator.sol";
 import {IMorphoAllocator, Phase, PendingWorkflow} from "src/interfaces/IMorphoAllocator.sol";
-import {LibMorphoAllocatorErrors} from "src/libs/LibMorphoAllocatorErrors.sol";
 
 /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
 /*                            MOCKS                           */
@@ -280,7 +279,7 @@ contract MorphoAllocatorTest is Test {
   }
 
   function _expectInvalidPhase(Phase expected, Phase actual) internal {
-    vm.expectRevert(abi.encodeWithSelector(LibMorphoAllocatorErrors.InvalidPhase.selector, INTENT_ID, expected, actual));
+    vm.expectRevert(abi.encodeWithSelector(MorphoAllocator.InvalidPhase.selector, INTENT_ID, expected, actual));
   }
 
   /*========== initialization ==========*/
@@ -425,7 +424,7 @@ contract MorphoAllocatorTest is Test {
 
     facility.setUnlockMint(collateralToken, 800e6);
 
-    vm.expectRevert(abi.encodeWithSelector(LibMorphoAllocatorErrors.SlippageExceeded.selector, 900e6, 800e6));
+    vm.expectRevert(abi.encodeWithSelector(MorphoAllocator.SlippageExceeded.selector, 900e6, 800e6));
     vm.prank(executor);
     allocator.completeWorkflow(INTENT_ID, 500e6, 700e6, true, 900e6);
 
@@ -445,7 +444,7 @@ contract MorphoAllocatorTest is Test {
     _startPhase1(1_000e6, 0);
     facility.setUnlockMint(collateralToken, 1_000e6);
 
-    vm.expectRevert(abi.encodeWithSelector(LibMorphoAllocatorErrors.TargetNotPositionManager.selector, INTENT_ID, true));
+    vm.expectRevert(abi.encodeWithSelector(MorphoAllocator.TargetNotPositionManager.selector, INTENT_ID, true));
     vm.prank(executor);
     allocator.completeWorkflow(INTENT_ID, 0, 0, true, 0);
   }
@@ -570,7 +569,7 @@ contract MorphoAllocatorTest is Test {
     facility.setUnlockMint(collateralToken, actual);
 
     if (actual < minOut) {
-      vm.expectRevert(abi.encodeWithSelector(LibMorphoAllocatorErrors.SlippageExceeded.selector, minOut, actual));
+      vm.expectRevert(abi.encodeWithSelector(MorphoAllocator.SlippageExceeded.selector, minOut, actual));
       vm.prank(executor);
       allocator.completeWorkflow(INTENT_ID, 0, 0, true, minOut);
       assertEq(uint256(allocator.workflow(INTENT_ID).phase), uint256(Phase.COMMITTED));
