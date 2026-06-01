@@ -46,7 +46,7 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable {
   /// @param facility    The Grunt Facility this allocator is a facilitator on.
   /// @param morphoVault The Morpho Vault V2 this allocator can reallocate.
   /// @param workflows   Per-intent workflow state.
-  struct MorphoAllocatorStorageData {
+  struct MorphoAllocatorStorage {
     IFacility facility;
     IVaultV2 morphoVault;
     mapping(uint256 intentId => PendingWorkflow) workflows;
@@ -116,7 +116,7 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable {
     require(address(facility_).code.length > 0, FacilityNotContract());
     require(address(morphoVault_).code.length > 0, MorphoVaultNotContract());
 
-    MorphoAllocatorStorageData storage $ = _allocatorStorage();
+    MorphoAllocatorStorage storage $ = _allocatorStorage();
     $.facility = facility_;
     $.morphoVault = morphoVault_;
 
@@ -161,7 +161,7 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable {
     address adapter,
     bytes calldata adapterData
   ) external override onlyRoles(EXECUTOR_ROLE) {
-    MorphoAllocatorStorageData storage $ = _allocatorStorage();
+    MorphoAllocatorStorage storage $ = _allocatorStorage();
     PendingWorkflow storage wf = $.workflows[intentId];
     if (wf.phase != Phase.IDLE) revert InvalidPhase(intentId, Phase.IDLE, wf.phase);
 
@@ -192,7 +192,7 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable {
     bool useTarget,
     uint256 minSharesUnlocked
   ) external override onlyRoles(EXECUTOR_ROLE) {
-    MorphoAllocatorStorageData storage $ = _allocatorStorage();
+    MorphoAllocatorStorage storage $ = _allocatorStorage();
     PendingWorkflow memory wf = $.workflows[intentId];
     if (wf.phase != Phase.COMMITTED) revert InvalidPhase(intentId, Phase.COMMITTED, wf.phase);
 
@@ -231,8 +231,8 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable {
   /// @dev Returns a reference to the contract's namespaced storage struct.
   ///      Loads the storage pointer from the fixed `STORAGE_SLOT`, ensuring a consistent
   ///      storage layout when used behind proxies.
-  /// @return data A storage pointer to the `MorphoAllocatorStorageData` struct.
-  function _allocatorStorage() private pure returns (MorphoAllocatorStorageData storage data) {
+  /// @return data A storage pointer to the `MorphoAllocatorStorage` struct.
+  function _allocatorStorage() private pure returns (MorphoAllocatorStorage storage data) {
     assembly ("memory-safe") {
       data.slot := STORAGE_SLOT
     }
