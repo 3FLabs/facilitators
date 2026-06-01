@@ -11,6 +11,7 @@ optimizer_runs = 200
 remappings = [
   "@grunt/=lib/grunt/src/",
   "@vault-v2/=lib/vault-v2/src/",
+  "@morpho-blue/=lib/vault-v2/lib/morpho-blue/src/",
   "solady/=lib/grunt/lib/solady/src/",
   # Grunt source imports use literal "lib/solady/..." and "lib/morpho-blue/..." paths.
   # Shadow them to grunt's transitive submodule locations so grunt compiles from here.

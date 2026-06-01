@@ -6,19 +6,23 @@ import {LibClone} from "solady/utils/LibClone.sol";
 
 import {IFacility} from "@grunt/interfaces/facility/IFacility.sol";
 import {IntentProperties, Asset} from "@grunt/libs/facility/LibIntent.sol";
-import {Mode, Order} from "@grunt/libs/funds/Order.sol";
-import {WithdrawalStrategy} from "@grunt/interfaces/manager/base/IPositionManagerAdmin.sol";
+import {Mode, Order, State} from "@grunt/libs/funds/Order.sol";
 
 import {IVaultV2} from "@vault-v2/interfaces/IVaultV2.sol";
 
+import {MarketParams, Id, Market} from "@morpho-blue/interfaces/IMorpho.sol";
+import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
+
 import {MorphoAllocator} from "src/MorphoAllocator.sol";
-import {IMorphoAllocator, Phase} from "src/interfaces/IMorphoAllocator.sol";
+import {IMorphoAllocator, Phase, Deallocation} from "src/interfaces/IMorphoAllocator.sol";
 
 /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
 /*                            MOCKS                           */
 /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
 
-/// @notice Minimal Facility mock. Implements only the methods MorphoAllocator calls.
+/// @notice Minimal Facility mock. Implements only the methods MorphoAllocator calls, and doubles as
+///         the intent's `IFund` by exposing `state(Order)`. `commit`/`unlock` drive the order state
+///         to configurable values so the allocator's PROCESSING/ENDED assertions can be exercised.
 contract MockFacility {
   error NotFacilitator();
 
@@ -48,12 +52,17 @@ contract MockFacility {
   mapping(uint256 => IntentProperties) internal _props;
   mapping(uint256 => mapping(address => uint256)) internal _balances;
   mapping(uint256 => address[]) internal _tokens;
-  mapping(uint256 => bool) internal _tokenSeen;
   mapping(uint256 => mapping(address => bool)) internal _tokenSeenByIntent;
+  mapping(uint256 => Order) internal _orders;
 
   // Unlock knob: amount of `unlockToken` to credit to the intent on `unlock`.
   uint256 public unlockMintAmount;
   address public unlockToken;
+
+  // Order-state knobs: state the order moves to after commit() / unlock().
+  State public orderState;
+  State public commitState = State.PROCESSING;
+  State public unlockState = State.ENDED;
 
   // Toggle to force `pull` to revert as if FACILITATOR_ROLE were missing.
   bool public pullRevertsForRoleMissing;
@@ -98,6 +107,14 @@ contract MockFacility {
     pullRevertsForRoleMissing = reverts;
   }
 
+  function setCommitState(State s) external {
+    commitState = s;
+  }
+
+  function setUnlockState(State s) external {
+    unlockState = s;
+  }
+
   function callOrderLength() external view returns (uint256) {
     return callOrder.length;
   }
@@ -125,18 +142,21 @@ contract MockFacility {
     createCount++;
     lastCreate = CreateCall({id: id, amount: amount, minAmountOut: minAmountOut, mode: mode});
     order = Order({mode: mode, owner: address(this), receiver: address(this), input: amount, output: 0, salt: 0});
+    _orders[id] = order;
   }
 
   function commit(uint256 id) external onlyFacilitator {
     callOrder.push("commit");
     commitCount++;
     lastCommitId = id;
+    orderState = commitState;
   }
 
   function unlock(uint256 id) external onlyFacilitator {
     callOrder.push("unlock");
     unlockCount++;
     lastUnlockId = id;
+    orderState = unlockState;
     if (unlockMintAmount > 0 && unlockToken != address(0)) {
       if (!_tokenSeenByIntent[id][unlockToken]) {
         _tokenSeenByIntent[id][unlockToken] = true;
@@ -161,7 +181,17 @@ contract MockFacility {
     view
     returns (IntentProperties memory properties, address fund, address request, bool resolved)
   {
-    return (_props[id], address(0), address(0), false);
+    // The facility itself plays the IFund role for the allocator's state assertions.
+    return (_props[id], address(this), address(0), false);
+  }
+
+  function getOrder(uint256 id) external view returns (Order memory order, bytes32 orderId) {
+    return (_orders[id], bytes32(0));
+  }
+
+  /// @notice Stand-in for `IFund.state(Order)` — the allocator queries this after commit/unlock.
+  function state(Order calldata) external view returns (State) {
+    return orderState;
   }
 
   function intentBalances(uint256 id) external view returns (address[] memory tokens, uint256[] memory amounts) {
@@ -176,20 +206,22 @@ contract MockFacility {
   }
 }
 
-/// @notice Minimal Morpho Vault V2 mock for the `allocate` allocator-role check.
+/// @notice Minimal Morpho Vault V2 mock recording `allocate`/`deallocate` under the allocator-role check.
 contract MockVaultV2 {
   error NotAllocator();
 
   mapping(address => bool) public isAllocator;
 
-  struct AllocateCall {
+  struct MoveCall {
     address adapter;
     bytes data;
     uint256 assets;
   }
 
-  AllocateCall public lastAllocate;
+  MoveCall public lastAllocate;
+  MoveCall public lastDeallocate;
   uint256 public allocateCount;
+  uint256 public deallocateCount;
 
   function setIsAllocator(address who, bool enabled) external {
     isAllocator[who] = enabled;
@@ -197,8 +229,38 @@ contract MockVaultV2 {
 
   function allocate(address adapter, bytes memory data, uint256 assets) external {
     if (!isAllocator[msg.sender]) revert NotAllocator();
-    lastAllocate = AllocateCall({adapter: adapter, data: data, assets: assets});
+    lastAllocate = MoveCall({adapter: adapter, data: data, assets: assets});
     allocateCount++;
+  }
+
+  function deallocate(address adapter, bytes memory data, uint256 assets) external {
+    if (!isAllocator[msg.sender]) revert NotAllocator();
+    lastDeallocate = MoveCall({adapter: adapter, data: data, assets: assets});
+    deallocateCount++;
+  }
+}
+
+/// @notice Minimal Morpho Blue mock returning settable per-market totals for utilisation checks.
+contract MockMorpho {
+  mapping(bytes32 => Market) internal _markets;
+
+  function setMarket(Id id, uint128 totalSupplyAssets, uint128 totalBorrowAssets) external {
+    Market storage m = _markets[Id.unwrap(id)];
+    m.totalSupplyAssets = totalSupplyAssets;
+    m.totalBorrowAssets = totalBorrowAssets;
+  }
+
+  function market(Id id) external view returns (Market memory) {
+    return _markets[Id.unwrap(id)];
+  }
+}
+
+/// @notice Minimal Morpho V1 Market adapter mock exposing only `morpho()`, used by the utilisation check.
+contract MockMarketAdapter {
+  address public morpho;
+
+  constructor(address morpho_) {
+    morpho = morpho_;
   }
 }
 
@@ -222,11 +284,15 @@ contract MockPositionManager {
 /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
 
 contract MorphoAllocatorTest is Test {
+  using MarketParamsLib for MarketParams;
+
   MorphoAllocator internal implementation;
   MorphoAllocator internal allocator;
   MockFacility internal facility;
   MockVaultV2 internal vault;
   MockPositionManager internal pm;
+  MockMorpho internal morpho;
+  MockMarketAdapter internal dealAdapter;
 
   address internal owner = address(0xA11CE);
   address internal executor = address(0xB0B);
@@ -235,14 +301,18 @@ contract MorphoAllocatorTest is Test {
   address internal collateralToken = address(0xC011);
   address internal debtToken = address(0xDEB7);
 
-  address internal adapter = address(0xADAA);
-  bytes internal adapterData = abi.encode(bytes32("market-id"));
+  // Allocation destination adapter; vault.allocate is mocked so it need not be a real adapter.
+  address internal allocAdapter = address(0xA110C);
+
+  MarketParams internal sourceMarket;
+  MarketParams internal targetMarket;
 
   uint256 internal constant INTENT_ID = 7;
+  uint256 internal constant WAD = 1e18;
 
-  event WorkflowStarted(uint256 indexed intentId, uint256 pullAmount);
+  event WorkflowStarted(uint256 indexed intentId, uint256 pullAmount, uint256 commitAmount);
   event WorkflowCompleted(
-    uint256 indexed intentId, uint256 unlocked, address adapter, uint256 allocateAmount, uint256 borrowAmount
+    uint256 indexed intentId, uint256 unlocked, address allocateAdapter, uint256 allocatedTotal, uint256 borrowAmount
   );
   event ExecutorSet(address indexed executor, bool enabled);
 
@@ -250,6 +320,26 @@ contract MorphoAllocatorTest is Test {
     facility = new MockFacility();
     vault = new MockVaultV2();
     pm = new MockPositionManager(collateralToken, debtToken);
+    morpho = new MockMorpho();
+    dealAdapter = new MockMarketAdapter(address(morpho));
+
+    sourceMarket = MarketParams({
+      loanToken: collateralToken,
+      collateralToken: address(0xC1),
+      oracle: address(0xC2),
+      irm: address(0xC3),
+      lltv: 0.8e18
+    });
+    targetMarket = MarketParams({
+      loanToken: collateralToken,
+      collateralToken: address(0xD1),
+      oracle: address(0xD2),
+      irm: address(0xD3),
+      lltv: 0.86e18
+    });
+
+    // Default source market: utilisation 0.1e18, well under any cap used in happy-path tests.
+    morpho.setMarket(sourceMarket.id(), 1_000e6, 100e6);
 
     implementation = new MorphoAllocator();
     allocator = MorphoAllocator(LibClone.clone(address(implementation)));
@@ -277,7 +367,19 @@ contract MorphoAllocatorTest is Test {
 
   function _startPhase1(uint256 pullAmount, uint256 minSharesOut) internal {
     vm.prank(executor);
-    allocator.start(INTENT_ID, pullAmount, minSharesOut);
+    allocator.start(INTENT_ID, pullAmount, pullAmount, minSharesOut);
+  }
+
+  /// @dev A single market-sourced deallocation from the default `sourceMarket` via `dealAdapter`.
+  function _deals(uint256 amount, uint256 maxUtilisation) internal view returns (Deallocation[] memory deals) {
+    deals = new Deallocation[](1);
+    deals[0] = Deallocation({
+      adapter: address(dealAdapter), marketParams: sourceMarket, amount: amount, maxUtilisation: maxUtilisation
+    });
+  }
+
+  function _noDeals() internal pure returns (Deallocation[] memory deals) {
+    deals = new Deallocation[](0);
   }
 
   function _expectInvalidPhase(Phase expected, Phase actual) internal {
@@ -308,27 +410,27 @@ contract MorphoAllocatorTest is Test {
   /*========== start ==========*/
 
   function test_start_happyPath() public {
+    // pullAmount and commitAmount differ to prove `create` is wired to commitAmount.
     vm.expectEmit(true, false, false, true, address(allocator));
-    emit WorkflowStarted(INTENT_ID, 1_000e6);
+    emit WorkflowStarted(INTENT_ID, 1_000e6, 900e6);
 
-    _startPhase1(1_000e6, 990e6);
+    vm.prank(executor);
+    allocator.start(INTENT_ID, 1_000e6, 900e6, 880e6);
 
     assertEq(facility.pullCount(), 1);
     assertEq(facility.createCount(), 1);
     assertEq(facility.commitCount(), 1);
 
-    (uint256 pId, uint256 pAmt) = facility.lastPull();
-    assertEq(pId, INTENT_ID);
-    assertEq(pAmt, 1_000e6);
+    (, uint256 pAmt) = facility.lastPull();
+    assertEq(pAmt, 1_000e6, "pull uses pullAmount");
 
     (uint256 cId, uint256 cAmt, uint256 cMin, Mode cMode) = facility.lastCreate();
     assertEq(cId, INTENT_ID);
-    assertEq(cAmt, 1_000e6);
-    assertEq(cMin, 990e6);
+    assertEq(cAmt, 900e6, "create uses commitAmount");
+    assertEq(cMin, 880e6);
     assertEq(uint256(cMode), uint256(Mode.DEPOSIT));
 
     assertEq(facility.lastCommitId(), INTENT_ID);
-
     assertEq(uint256(allocator.workflow(INTENT_ID)), uint256(Phase.COMMITTED));
 
     // Ordering: pull → create → commit
@@ -337,25 +439,36 @@ contract MorphoAllocatorTest is Test {
     assertEq(facility.callOrder(2), "commit");
   }
 
+  function test_start_revertsWhenOrderNotProcessing() public {
+    facility.setCommitState(State.UNLOCKING);
+    vm.expectRevert(
+      abi.encodeWithSelector(MorphoAllocator.UnexpectedOrderState.selector, State.PROCESSING, State.UNLOCKING)
+    );
+    vm.prank(executor);
+    allocator.start(INTENT_ID, 1_000e6, 1_000e6, 0);
+
+    assertEq(uint256(allocator.workflow(INTENT_ID)), uint256(Phase.IDLE), "phase not advanced");
+  }
+
   function test_start_revertsWhenNotIdle() public {
     _startPhase1(1_000e6, 0);
 
     _expectInvalidPhase(Phase.IDLE, Phase.COMMITTED);
     vm.prank(executor);
-    allocator.start(INTENT_ID, 1_000e6, 0);
+    allocator.start(INTENT_ID, 1_000e6, 1_000e6, 0);
   }
 
   function test_start_revertsWhenNotExecutor() public {
     vm.expectRevert();
     vm.prank(stranger);
-    allocator.start(INTENT_ID, 1_000e6, 0);
+    allocator.start(INTENT_ID, 1_000e6, 1_000e6, 0);
   }
 
   function test_start_revertsWhenFacilityRoleMissing() public {
     facility.setFacilitator(address(allocator), false);
     vm.expectRevert(MockFacility.NotFacilitator.selector);
     vm.prank(executor);
-    allocator.start(INTENT_ID, 1_000e6, 0);
+    allocator.start(INTENT_ID, 1_000e6, 1_000e6, 0);
   }
 
   /*========== complete ==========*/
@@ -364,26 +477,33 @@ contract MorphoAllocatorTest is Test {
     _configureIntentWithTargetPm();
     _expectInvalidPhase(Phase.COMMITTED, Phase.IDLE);
     vm.prank(executor);
-    allocator.complete(INTENT_ID, adapter, adapterData, 500e6, 700e6, true, 0);
+    allocator.complete(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 700e6, true, 0);
   }
 
   function test_complete_happyPath_useTarget() public {
     _configureIntentWithTargetPm();
     _startPhase1(1_000e6, 0);
-
     facility.setUnlockMint(collateralToken, 950e6);
 
     vm.expectEmit(true, false, false, true, address(allocator));
-    emit WorkflowCompleted(INTENT_ID, 950e6, adapter, 500e6, 700e6);
+    emit WorkflowCompleted(INTENT_ID, 950e6, allocAdapter, 500e6, 700e6);
 
     vm.prank(executor);
-    allocator.complete(INTENT_ID, adapter, adapterData, 500e6, 700e6, true, 900e6);
+    allocator.complete(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 700e6, true, 900e6);
 
+    // Deallocation withdrew 500e6 from the source market.
+    assertEq(vault.deallocateCount(), 1);
+    (address dAdapter, bytes memory dData, uint256 dAssets) = vault.lastDeallocate();
+    assertEq(dAdapter, address(dealAdapter), "deallocate adapter");
+    assertEq(dData, abi.encode(sourceMarket), "deallocate data");
+    assertEq(dAssets, 500e6, "deallocate amount");
+
+    // The gathered total (500e6) was allocated into the destination market.
     assertEq(vault.allocateCount(), 1);
     (address aAdapter, bytes memory aData, uint256 aAssets) = vault.lastAllocate();
-    assertEq(aAdapter, adapter, "allocate adapter");
-    assertEq(aData, adapterData, "allocate data");
-    assertEq(aAssets, 500e6, "allocate amount");
+    assertEq(aAdapter, allocAdapter, "allocate adapter");
+    assertEq(aData, abi.encode(targetMarket), "allocate data");
+    assertEq(aAssets, 500e6, "allocate total");
 
     assertEq(facility.depositManagerCount(), 1);
     (uint256 dId, uint256 dDeposit, uint256 dBorrow, bool dUseTarget) = facility.lastDepositManager();
@@ -395,16 +515,16 @@ contract MorphoAllocatorTest is Test {
     assertEq(uint256(allocator.workflow(INTENT_ID)), uint256(Phase.IDLE), "phase reset");
   }
 
-  function test_complete_happyPath_useDeposit() public {
+  function test_complete_happyPath_useDeposit_noRebalance() public {
     _configureIntentWithDepositPm();
     _startPhase1(1_000e6, 0);
-
     facility.setUnlockMint(collateralToken, 1_000e6);
 
     vm.prank(executor);
-    allocator.complete(INTENT_ID, adapter, adapterData, 0, 700e6, false, 0);
+    allocator.complete(INTENT_ID, _noDeals(), address(0), targetMarket, 700e6, false, 0);
 
-    assertEq(vault.allocateCount(), 0, "allocate skipped when amount=0");
+    assertEq(vault.deallocateCount(), 0, "no deallocation");
+    assertEq(vault.allocateCount(), 0, "allocate skipped (no sources)");
 
     (uint256 dId, uint256 dDeposit, uint256 dBorrow, bool dUseTarget) = facility.lastDepositManager();
     assertEq(dId, INTENT_ID);
@@ -413,19 +533,116 @@ contract MorphoAllocatorTest is Test {
     assertFalse(dUseTarget);
   }
 
+  function test_complete_idleSourceSkipsDeallocate() public {
+    _configureIntentWithTargetPm();
+    _startPhase1(1_000e6, 0);
+    facility.setUnlockMint(collateralToken, 1_000e6);
+
+    // adapter == address(0): the 300e6 is sourced from idle liquidity, no deallocate / util check.
+    Deallocation[] memory deals = new Deallocation[](1);
+    deals[0] = Deallocation({adapter: address(0), marketParams: sourceMarket, amount: 300e6, maxUtilisation: 0});
+
+    vm.prank(executor);
+    allocator.complete(INTENT_ID, deals, allocAdapter, targetMarket, 0, true, 0);
+
+    assertEq(vault.deallocateCount(), 0, "no deallocate for idle source");
+    assertEq(vault.allocateCount(), 1, "allocate of gathered total");
+    (,, uint256 aAssets) = vault.lastAllocate();
+    assertEq(aAssets, 300e6, "allocated total = idle amount");
+  }
+
+  function test_complete_multiSourceSumsIntoAllocate() public {
+    _configureIntentWithTargetPm();
+    _startPhase1(1_000e6, 0);
+    facility.setUnlockMint(collateralToken, 1_000e6);
+
+    Deallocation[] memory deals = new Deallocation[](2);
+    deals[0] =
+      Deallocation({adapter: address(dealAdapter), marketParams: sourceMarket, amount: 200e6, maxUtilisation: WAD});
+    deals[1] = Deallocation({adapter: address(0), marketParams: sourceMarket, amount: 300e6, maxUtilisation: 0});
+
+    vm.prank(executor);
+    allocator.complete(INTENT_ID, deals, allocAdapter, targetMarket, 0, true, 0);
+
+    assertEq(vault.deallocateCount(), 1, "only the market source deallocates");
+    assertEq(vault.allocateCount(), 1);
+    (,, uint256 aAssets) = vault.lastAllocate();
+    assertEq(aAssets, 500e6, "allocated total = 200e6 + 300e6");
+  }
+
+  function test_complete_skipsAllocateWhenAdapterZero() public {
+    _configureIntentWithTargetPm();
+    _startPhase1(1_000e6, 0);
+    facility.setUnlockMint(collateralToken, 1_000e6);
+
+    // Gather 500e6 from a market but leave it idle (allocateAdapter == 0).
+    vm.prank(executor);
+    allocator.complete(INTENT_ID, _deals(500e6, WAD), address(0), targetMarket, 0, true, 0);
+
+    assertEq(vault.deallocateCount(), 1, "still deallocates the source");
+    assertEq(vault.allocateCount(), 0, "allocate skipped when adapter == 0");
+    assertEq(facility.depositManagerCount(), 1);
+  }
+
+  function test_complete_skipsAllocateWhenNoSources() public {
+    _configureIntentWithTargetPm();
+    _startPhase1(1_000e6, 0);
+    facility.setUnlockMint(collateralToken, 1_000e6);
+
+    vm.prank(executor);
+    allocator.complete(INTENT_ID, _noDeals(), allocAdapter, targetMarket, 700e6, true, 0);
+
+    assertEq(vault.allocateCount(), 0, "total is zero, allocate skipped");
+    assertEq(facility.depositManagerCount(), 1);
+  }
+
+  function test_complete_revertsOnMaxUtilisation() public {
+    _configureIntentWithTargetPm();
+    _startPhase1(1_000e6, 0);
+    facility.setUnlockMint(collateralToken, 1_000e6);
+
+    // Source market at 90% utilisation (900e6 / 1000e6); cap at 50%.
+    morpho.setMarket(sourceMarket.id(), 1_000e6, 900e6);
+
+    vm.expectRevert(
+      abi.encodeWithSelector(MorphoAllocator.MaxUtilisationExceeded.selector, address(dealAdapter), 0.9e18, 0.5e18)
+    );
+    vm.prank(executor);
+    allocator.complete(INTENT_ID, _deals(500e6, 0.5e18), allocAdapter, targetMarket, 0, true, 0);
+
+    assertEq(uint256(allocator.workflow(INTENT_ID)), uint256(Phase.COMMITTED), "still committed");
+    assertEq(facility.depositManagerCount(), 0, "depositManager not called");
+  }
+
+  function test_complete_revertsWhenOrderNotEnded() public {
+    _configureIntentWithTargetPm();
+    _startPhase1(1_000e6, 0);
+    facility.setUnlockMint(collateralToken, 1_000e6);
+    facility.setUnlockState(State.PROCESSING); // unlock leaves a non-ENDED state
+
+    vm.expectRevert(
+      abi.encodeWithSelector(MorphoAllocator.UnexpectedOrderState.selector, State.ENDED, State.PROCESSING)
+    );
+    vm.prank(executor);
+    allocator.complete(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 0, true, 0);
+
+    assertEq(vault.deallocateCount(), 0, "rebalance not reached");
+    assertEq(facility.depositManagerCount(), 0);
+    assertEq(uint256(allocator.workflow(INTENT_ID)), uint256(Phase.COMMITTED), "still committed");
+  }
+
   function test_complete_revertsOnSlippage() public {
     _configureIntentWithTargetPm();
     _startPhase1(1_000e6, 0);
-
     facility.setUnlockMint(collateralToken, 800e6);
 
     vm.expectRevert(abi.encodeWithSelector(MorphoAllocator.SlippageExceeded.selector, 900e6, 800e6));
     vm.prank(executor);
-    allocator.complete(INTENT_ID, adapter, adapterData, 500e6, 700e6, true, 900e6);
+    allocator.complete(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 700e6, true, 900e6);
 
+    assertEq(vault.deallocateCount(), 0, "rebalance not reached");
     assertEq(vault.allocateCount(), 0, "allocate not called");
     assertEq(facility.depositManagerCount(), 0, "depositManager not called");
-
     assertEq(uint256(allocator.workflow(INTENT_ID)), uint256(Phase.COMMITTED), "still committed");
   }
 
@@ -440,7 +657,7 @@ contract MorphoAllocatorTest is Test {
 
     vm.expectRevert(abi.encodeWithSelector(MorphoAllocator.TargetNotPositionManager.selector, INTENT_ID, true));
     vm.prank(executor);
-    allocator.complete(INTENT_ID, adapter, adapterData, 0, 0, true, 0);
+    allocator.complete(INTENT_ID, _noDeals(), allocAdapter, targetMarket, 0, true, 0);
   }
 
   function test_complete_revertsWhenAllocatorRoleMissing() public {
@@ -450,45 +667,16 @@ contract MorphoAllocatorTest is Test {
 
     vault.setIsAllocator(address(allocator), false);
 
+    // The first vault interaction (deallocate) reverts on the missing allocator role.
     vm.expectRevert(MockVaultV2.NotAllocator.selector);
     vm.prank(executor);
-    allocator.complete(INTENT_ID, adapter, adapterData, 500e6, 700e6, true, 0);
+    allocator.complete(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 700e6, true, 0);
 
     assertEq(uint256(allocator.workflow(INTENT_ID)), uint256(Phase.COMMITTED), "still committed");
     assertEq(facility.depositManagerCount(), 0, "depositManager not called");
   }
 
-  function test_complete_skipsAllocateWhenZero() public {
-    _configureIntentWithTargetPm();
-    _startPhase1(1_000e6, 0);
-    facility.setUnlockMint(collateralToken, 1_000e6);
-
-    vm.prank(executor);
-    allocator.complete(INTENT_ID, adapter, adapterData, 0, 700e6, true, 0);
-
-    assertEq(vault.allocateCount(), 0);
-    assertEq(facility.depositManagerCount(), 1);
-  }
-
-  function test_complete_passesAdapterAndDataToVault() public {
-    _configureIntentWithTargetPm();
-    _startPhase1(1_000e6, 0);
-    facility.setUnlockMint(collateralToken, 1_000e6);
-
-    // Phase 2 chooses the allocation target: the `(adapter, adapterData)` passed to `complete`
-    // must reach the vault verbatim. Use values distinct from the defaults to prove the source.
-    address adapter2 = address(0xBEEF);
-    bytes memory data2 = abi.encode(bytes32("phase2-market"));
-
-    vm.prank(executor);
-    allocator.complete(INTENT_ID, adapter2, data2, 123, 0, true, 0);
-
-    (address aAdapter, bytes memory aData,) = vault.lastAllocate();
-    assertEq(aAdapter, adapter2);
-    assertEq(aData, data2);
-  }
-
-  function test_complete_orderingUnlockBeforeAllocate() public {
+  function test_complete_orderingUnlockBeforeDeposit() public {
     _configureIntentWithTargetPm();
     _startPhase1(1_000e6, 0);
     facility.setUnlockMint(collateralToken, 1_000e6);
@@ -496,13 +684,12 @@ contract MorphoAllocatorTest is Test {
     uint256 phase1End = facility.callOrderLength();
 
     vm.prank(executor);
-    allocator.complete(INTENT_ID, adapter, adapterData, 500e6, 700e6, true, 0);
+    allocator.complete(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 700e6, true, 0);
 
-    // The vault.allocate call does not land in MockFacility.callOrder; verify that
-    // unlock occurred before depositManager (allocate happens between them).
+    // unlock lands first, depositManager last; the vault deallocate/allocate happen in between.
     assertEq(facility.callOrder(phase1End), "unlock");
     assertEq(facility.callOrder(phase1End + 1), "depositManager");
-    // Vault.allocate was invoked exactly once between unlock and depositManager.
+    assertEq(vault.deallocateCount(), 1);
     assertEq(vault.allocateCount(), 1);
   }
 
@@ -513,7 +700,35 @@ contract MorphoAllocatorTest is Test {
 
     vm.expectRevert();
     vm.prank(stranger);
-    allocator.complete(INTENT_ID, adapter, adapterData, 0, 0, true, 0);
+    allocator.complete(INTENT_ID, _noDeals(), allocAdapter, targetMarket, 0, true, 0);
+  }
+
+  /*========== multicall ==========*/
+
+  function test_multicall_batchesStarts() public {
+    uint256 id1 = INTENT_ID;
+    uint256 id2 = INTENT_ID + 1;
+
+    bytes[] memory calls = new bytes[](2);
+    calls[0] = abi.encodeCall(MorphoAllocator.start, (id1, uint256(1_000e6), uint256(1_000e6), uint256(0)));
+    calls[1] = abi.encodeCall(MorphoAllocator.start, (id2, uint256(2_000e6), uint256(2_000e6), uint256(0)));
+
+    vm.prank(executor);
+    allocator.multicall(calls);
+
+    assertEq(uint256(allocator.workflow(id1)), uint256(Phase.COMMITTED));
+    assertEq(uint256(allocator.workflow(id2)), uint256(Phase.COMMITTED));
+    assertEq(facility.commitCount(), 2);
+  }
+
+  function test_multicall_preservesRoleGating() public {
+    bytes[] memory calls = new bytes[](1);
+    calls[0] = abi.encodeCall(MorphoAllocator.start, (INTENT_ID, uint256(1_000e6), uint256(1_000e6), uint256(0)));
+
+    // msg.sender is preserved through the delegatecall, so a non-executor is still rejected.
+    vm.expectRevert();
+    vm.prank(stranger);
+    allocator.multicall(calls);
   }
 
   /*========== multiple intents ==========*/
@@ -527,25 +742,21 @@ contract MorphoAllocatorTest is Test {
     facility.setIntent(id1, props);
     facility.setIntent(id2, props);
 
-    address adapter2 = address(0xBEEF);
-    bytes memory data2 = abi.encode(bytes32("other-market"));
-
     vm.prank(executor);
-    allocator.start(id1, 1_000e6, 0);
+    allocator.start(id1, 1_000e6, 1_000e6, 0);
     vm.prank(executor);
-    allocator.start(id2, 2_000e6, 0);
+    allocator.start(id2, 2_000e6, 2_000e6, 0);
 
     assertEq(uint256(allocator.workflow(id1)), uint256(Phase.COMMITTED));
     assertEq(uint256(allocator.workflow(id2)), uint256(Phase.COMMITTED));
 
-    // Complete id2 first with its own target; id1 must remain COMMITTED.
+    // Complete id2 first; id1 must remain COMMITTED.
     facility.setUnlockMint(collateralToken, 1_500e6);
     vm.prank(executor);
-    allocator.complete(id2, adapter2, data2, 100, 0, true, 0);
+    allocator.complete(id2, _deals(100e6, WAD), allocAdapter, targetMarket, 0, true, 0);
 
-    (address aAdapter, bytes memory aData,) = vault.lastAllocate();
-    assertEq(aAdapter, adapter2);
-    assertEq(aData, data2);
+    (,, uint256 aAssets) = vault.lastAllocate();
+    assertEq(aAssets, 100e6);
 
     assertEq(uint256(allocator.workflow(id1)), uint256(Phase.COMMITTED));
     assertEq(uint256(allocator.workflow(id2)), uint256(Phase.IDLE));
@@ -564,11 +775,11 @@ contract MorphoAllocatorTest is Test {
     if (actual < minOut) {
       vm.expectRevert(abi.encodeWithSelector(MorphoAllocator.SlippageExceeded.selector, minOut, actual));
       vm.prank(executor);
-      allocator.complete(INTENT_ID, adapter, adapterData, 0, 0, true, minOut);
+      allocator.complete(INTENT_ID, _noDeals(), address(0), targetMarket, 0, true, minOut);
       assertEq(uint256(allocator.workflow(INTENT_ID)), uint256(Phase.COMMITTED));
     } else {
       vm.prank(executor);
-      allocator.complete(INTENT_ID, adapter, adapterData, 0, 0, true, minOut);
+      allocator.complete(INTENT_ID, _noDeals(), address(0), targetMarket, 0, true, minOut);
       assertEq(uint256(allocator.workflow(INTENT_ID)), uint256(Phase.IDLE));
     }
   }
