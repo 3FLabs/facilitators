@@ -147,10 +147,14 @@ contract MockFacility {
     }
   }
 
-  function depositManager(uint256 id, uint256 depositAmount, uint256 borrowAmount, bool useTarget) external onlyFacilitator {
+  function depositManager(uint256 id, uint256 depositAmount, uint256 borrowAmount, bool useTarget)
+    external
+    onlyFacilitator
+  {
     callOrder.push("depositManager");
     depositManagerCount++;
-    lastDepositManager = DepositManagerCall({id: id, depositAmount: depositAmount, borrowAmount: borrowAmount, useTarget: useTarget});
+    lastDepositManager =
+      DepositManagerCall({id: id, depositAmount: depositAmount, borrowAmount: borrowAmount, useTarget: useTarget});
   }
 
   function getIntent(uint256 id)
@@ -514,26 +518,6 @@ contract MorphoAllocatorTest is Test {
     vm.expectRevert();
     vm.prank(stranger);
     allocator.completeWorkflow(INTENT_ID, 0, 0, true, 0);
-  }
-
-  /*========== executor admin ==========*/
-
-  function test_setExecutor_onlyOwner() public {
-    vm.expectRevert();
-    vm.prank(stranger);
-    allocator.setExecutor(stranger, true);
-
-    vm.expectEmit(true, false, false, true, address(allocator));
-    emit ExecutorSet(stranger, true);
-    vm.prank(owner);
-    allocator.setExecutor(stranger, true);
-    assertTrue(allocator.hasAnyRole(stranger, 1));
-
-    vm.expectEmit(true, false, false, true, address(allocator));
-    emit ExecutorSet(stranger, false);
-    vm.prank(owner);
-    allocator.setExecutor(stranger, false);
-    assertFalse(allocator.hasAnyRole(stranger, 1));
   }
 
   /*========== multiple intents ==========*/

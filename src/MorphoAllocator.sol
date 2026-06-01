@@ -95,17 +95,6 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable {
   }
 
   /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
-  /*                           ADMIN                            */
-  /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
-
-  /// @inheritdoc IMorphoAllocator
-  function setExecutor(address executor, bool enabled) external override onlyOwner {
-    if (enabled) _grantRoles(executor, EXECUTOR_ROLE);
-    else _removeRoles(executor, EXECUTOR_ROLE);
-    emit ExecutorSet(executor, enabled);
-  }
-
-  /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
   /*                          PHASE 1                           */
   /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
 

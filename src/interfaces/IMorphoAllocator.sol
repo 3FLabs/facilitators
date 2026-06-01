@@ -62,16 +62,6 @@ interface IMorphoAllocator {
   function workflow(uint256 intentId) external view returns (PendingWorkflow memory);
 
   /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
-  /*                           ADMIN                            */
-  /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
-
-  /// @notice Grants or revokes the executor role for an address.
-  /// @dev Owner-only. The executor role gates both `startWorkflow` and `completeWorkflow`.
-  /// @param executor The address to update.
-  /// @param enabled  True to grant, false to revoke.
-  function setExecutor(address executor, bool enabled) external;
-
-  /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
   /*                          PHASES                            */
   /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
 
