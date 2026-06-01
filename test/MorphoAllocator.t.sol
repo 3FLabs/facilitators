@@ -275,7 +275,7 @@ contract MorphoAllocatorTest is Test {
 
   function _startPhase1(uint256 pullAmount, uint256 minSharesOut) internal {
     vm.prank(executor);
-    allocator.startWorkflow(INTENT_ID, pullAmount, minSharesOut, adapter, adapterData);
+    allocator.start(INTENT_ID, pullAmount, minSharesOut, adapter, adapterData);
   }
 
   function _expectInvalidPhase(Phase expected, Phase actual) internal {
@@ -304,9 +304,9 @@ contract MorphoAllocatorTest is Test {
     assertFalse(fresh.hasAnyRole(address(0), 1));
   }
 
-  /*========== startWorkflow ==========*/
+  /*========== start ==========*/
 
-  function test_startWorkflow_happyPath() public {
+  function test_start_happyPath() public {
     vm.expectEmit(true, false, false, true, address(allocator));
     emit WorkflowStarted(INTENT_ID, 1_000e6, adapter);
 
@@ -339,37 +339,37 @@ contract MorphoAllocatorTest is Test {
     assertEq(facility.callOrder(2), "commit");
   }
 
-  function test_startWorkflow_revertsWhenNotIdle() public {
+  function test_start_revertsWhenNotIdle() public {
     _startPhase1(1_000e6, 0);
 
     _expectInvalidPhase(Phase.IDLE, Phase.COMMITTED);
     vm.prank(executor);
-    allocator.startWorkflow(INTENT_ID, 1_000e6, 0, adapter, adapterData);
+    allocator.start(INTENT_ID, 1_000e6, 0, adapter, adapterData);
   }
 
-  function test_startWorkflow_revertsWhenNotExecutor() public {
+  function test_start_revertsWhenNotExecutor() public {
     vm.expectRevert();
     vm.prank(stranger);
-    allocator.startWorkflow(INTENT_ID, 1_000e6, 0, adapter, adapterData);
+    allocator.start(INTENT_ID, 1_000e6, 0, adapter, adapterData);
   }
 
-  function test_startWorkflow_revertsWhenFacilityRoleMissing() public {
+  function test_start_revertsWhenFacilityRoleMissing() public {
     facility.setFacilitator(address(allocator), false);
     vm.expectRevert(MockFacility.NotFacilitator.selector);
     vm.prank(executor);
-    allocator.startWorkflow(INTENT_ID, 1_000e6, 0, adapter, adapterData);
+    allocator.start(INTENT_ID, 1_000e6, 0, adapter, adapterData);
   }
 
-  /*========== completeWorkflow ==========*/
+  /*========== complete ==========*/
 
-  function test_completeWorkflow_revertsWhenNotCommitted() public {
+  function test_complete_revertsWhenNotCommitted() public {
     _configureIntentWithTargetPm();
     _expectInvalidPhase(Phase.COMMITTED, Phase.IDLE);
     vm.prank(executor);
-    allocator.completeWorkflow(INTENT_ID, 500e6, 700e6, true, 0);
+    allocator.complete(INTENT_ID, 500e6, 700e6, true, 0);
   }
 
-  function test_completeWorkflow_happyPath_useTarget() public {
+  function test_complete_happyPath_useTarget() public {
     _configureIntentWithTargetPm();
     _startPhase1(1_000e6, 0);
 
@@ -379,7 +379,7 @@ contract MorphoAllocatorTest is Test {
     emit WorkflowCompleted(INTENT_ID, 950e6, 500e6, 700e6);
 
     vm.prank(executor);
-    allocator.completeWorkflow(INTENT_ID, 500e6, 700e6, true, 900e6);
+    allocator.complete(INTENT_ID, 500e6, 700e6, true, 900e6);
 
     assertEq(vault.allocateCount(), 1);
     (address aAdapter, bytes memory aData, uint256 aAssets) = vault.lastAllocate();
@@ -400,14 +400,14 @@ contract MorphoAllocatorTest is Test {
     assertEq(wf.adapterData.length, 0);
   }
 
-  function test_completeWorkflow_happyPath_useDeposit() public {
+  function test_complete_happyPath_useDeposit() public {
     _configureIntentWithDepositPm();
     _startPhase1(1_000e6, 0);
 
     facility.setUnlockMint(collateralToken, 1_000e6);
 
     vm.prank(executor);
-    allocator.completeWorkflow(INTENT_ID, 0, 700e6, false, 0);
+    allocator.complete(INTENT_ID, 0, 700e6, false, 0);
 
     assertEq(vault.allocateCount(), 0, "allocate skipped when amount=0");
 
@@ -418,7 +418,7 @@ contract MorphoAllocatorTest is Test {
     assertFalse(dUseTarget);
   }
 
-  function test_completeWorkflow_revertsOnSlippage() public {
+  function test_complete_revertsOnSlippage() public {
     _configureIntentWithTargetPm();
     _startPhase1(1_000e6, 0);
 
@@ -426,7 +426,7 @@ contract MorphoAllocatorTest is Test {
 
     vm.expectRevert(abi.encodeWithSelector(MorphoAllocator.SlippageExceeded.selector, 900e6, 800e6));
     vm.prank(executor);
-    allocator.completeWorkflow(INTENT_ID, 500e6, 700e6, true, 900e6);
+    allocator.complete(INTENT_ID, 500e6, 700e6, true, 900e6);
 
     assertEq(vault.allocateCount(), 0, "allocate not called");
     assertEq(facility.depositManagerCount(), 0, "depositManager not called");
@@ -435,7 +435,7 @@ contract MorphoAllocatorTest is Test {
     assertEq(uint256(wf.phase), uint256(Phase.COMMITTED), "still committed");
   }
 
-  function test_completeWorkflow_revertsIfTargetNotPM() public {
+  function test_complete_revertsIfTargetNotPM() public {
     IntentProperties memory props;
     props.depositAsset = Asset({asset: address(0xDA), isPositionManager: false});
     props.targetAsset = Asset({asset: address(0xFA), isPositionManager: false});
@@ -446,10 +446,10 @@ contract MorphoAllocatorTest is Test {
 
     vm.expectRevert(abi.encodeWithSelector(MorphoAllocator.TargetNotPositionManager.selector, INTENT_ID, true));
     vm.prank(executor);
-    allocator.completeWorkflow(INTENT_ID, 0, 0, true, 0);
+    allocator.complete(INTENT_ID, 0, 0, true, 0);
   }
 
-  function test_completeWorkflow_revertsWhenAllocatorRoleMissing() public {
+  function test_complete_revertsWhenAllocatorRoleMissing() public {
     _configureIntentWithTargetPm();
     _startPhase1(1_000e6, 0);
     facility.setUnlockMint(collateralToken, 1_000e6);
@@ -458,40 +458,40 @@ contract MorphoAllocatorTest is Test {
 
     vm.expectRevert(MockVaultV2.NotAllocator.selector);
     vm.prank(executor);
-    allocator.completeWorkflow(INTENT_ID, 500e6, 700e6, true, 0);
+    allocator.complete(INTENT_ID, 500e6, 700e6, true, 0);
 
     PendingWorkflow memory wf = allocator.workflow(INTENT_ID);
     assertEq(uint256(wf.phase), uint256(Phase.COMMITTED), "still committed");
     assertEq(facility.depositManagerCount(), 0, "depositManager not called");
   }
 
-  function test_completeWorkflow_skipsAllocateWhenZero() public {
+  function test_complete_skipsAllocateWhenZero() public {
     _configureIntentWithTargetPm();
     _startPhase1(1_000e6, 0);
     facility.setUnlockMint(collateralToken, 1_000e6);
 
     vm.prank(executor);
-    allocator.completeWorkflow(INTENT_ID, 0, 700e6, true, 0);
+    allocator.complete(INTENT_ID, 0, 700e6, true, 0);
 
     assertEq(vault.allocateCount(), 0);
     assertEq(facility.depositManagerCount(), 1);
   }
 
-  function test_completeWorkflow_adapterLockedIn() public {
+  function test_complete_adapterLockedIn() public {
     _configureIntentWithTargetPm();
     _startPhase1(1_000e6, 0);
     facility.setUnlockMint(collateralToken, 1_000e6);
 
     // Phase 2 takes no adapter argument: the locked-in `(adapter, adapterData)` must reach the vault.
     vm.prank(executor);
-    allocator.completeWorkflow(INTENT_ID, 123, 0, true, 0);
+    allocator.complete(INTENT_ID, 123, 0, true, 0);
 
     (address aAdapter, bytes memory aData,) = vault.lastAllocate();
     assertEq(aAdapter, adapter);
     assertEq(aData, adapterData);
   }
 
-  function test_completeWorkflow_orderingUnlockBeforeAllocate() public {
+  function test_complete_orderingUnlockBeforeAllocate() public {
     _configureIntentWithTargetPm();
     _startPhase1(1_000e6, 0);
     facility.setUnlockMint(collateralToken, 1_000e6);
@@ -499,7 +499,7 @@ contract MorphoAllocatorTest is Test {
     uint256 phase1End = facility.callOrderLength();
 
     vm.prank(executor);
-    allocator.completeWorkflow(INTENT_ID, 500e6, 700e6, true, 0);
+    allocator.complete(INTENT_ID, 500e6, 700e6, true, 0);
 
     // The vault.allocate call does not land in MockFacility.callOrder; verify that
     // unlock occurred before depositManager (allocate happens between them).
@@ -509,14 +509,14 @@ contract MorphoAllocatorTest is Test {
     assertEq(vault.allocateCount(), 1);
   }
 
-  function test_completeWorkflow_revertsWhenNotExecutor() public {
+  function test_complete_revertsWhenNotExecutor() public {
     _configureIntentWithTargetPm();
     _startPhase1(1_000e6, 0);
     facility.setUnlockMint(collateralToken, 1_000e6);
 
     vm.expectRevert();
     vm.prank(stranger);
-    allocator.completeWorkflow(INTENT_ID, 0, 0, true, 0);
+    allocator.complete(INTENT_ID, 0, 0, true, 0);
   }
 
   /*========== multiple intents ==========*/
@@ -534,9 +534,9 @@ contract MorphoAllocatorTest is Test {
     bytes memory data2 = abi.encode(bytes32("other-market"));
 
     vm.prank(executor);
-    allocator.startWorkflow(id1, 1_000e6, 0, adapter, adapterData);
+    allocator.start(id1, 1_000e6, 0, adapter, adapterData);
     vm.prank(executor);
-    allocator.startWorkflow(id2, 2_000e6, 0, adapter2, data2);
+    allocator.start(id2, 2_000e6, 0, adapter2, data2);
 
     PendingWorkflow memory wf1 = allocator.workflow(id1);
     PendingWorkflow memory wf2 = allocator.workflow(id2);
@@ -548,7 +548,7 @@ contract MorphoAllocatorTest is Test {
     // Complete id2 first; id1 must remain COMMITTED.
     facility.setUnlockMint(collateralToken, 1_500e6);
     vm.prank(executor);
-    allocator.completeWorkflow(id2, 100, 0, true, 0);
+    allocator.complete(id2, 100, 0, true, 0);
 
     (address aAdapter, bytes memory aData,) = vault.lastAllocate();
     assertEq(aAdapter, adapter2);
@@ -571,11 +571,11 @@ contract MorphoAllocatorTest is Test {
     if (actual < minOut) {
       vm.expectRevert(abi.encodeWithSelector(MorphoAllocator.SlippageExceeded.selector, minOut, actual));
       vm.prank(executor);
-      allocator.completeWorkflow(INTENT_ID, 0, 0, true, minOut);
+      allocator.complete(INTENT_ID, 0, 0, true, minOut);
       assertEq(uint256(allocator.workflow(INTENT_ID).phase), uint256(Phase.COMMITTED));
     } else {
       vm.prank(executor);
-      allocator.completeWorkflow(INTENT_ID, 0, 0, true, minOut);
+      allocator.complete(INTENT_ID, 0, 0, true, minOut);
       assertEq(uint256(allocator.workflow(INTENT_ID).phase), uint256(Phase.IDLE));
     }
   }

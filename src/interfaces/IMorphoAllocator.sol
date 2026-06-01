@@ -74,7 +74,7 @@ interface IMorphoAllocator {
   /// @param minSharesOut Minimum shares the DEPOSIT order must mint (slippage guard on fund side).
   /// @param adapter      The Morpho Vault V2 adapter Phase 2 will allocate through.
   /// @param adapterData  ABI-encoded adapter parameters used in Phase 2.
-  function startWorkflow(
+  function start(
     uint256 intentId,
     uint256 pullAmount,
     uint256 minSharesOut,
@@ -92,7 +92,7 @@ interface IMorphoAllocator {
   /// @param useTarget         True to use the intent's target asset as the PositionManager,
   ///                          false to use the deposit asset.
   /// @param minSharesUnlocked Minimum amount that must be unlocked (slippage guard on unlock).
-  function completeWorkflow(
+  function complete(
     uint256 intentId,
     uint256 allocateAmount,
     uint256 borrowAmount,

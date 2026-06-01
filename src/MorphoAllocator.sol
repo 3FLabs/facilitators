@@ -154,7 +154,7 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable {
   /// @inheritdoc IMorphoAllocator
   /// @dev Atomic sequence: `Facility.pull` → `Facility.create(DEPOSIT)` → `Facility.commit`.
   ///      Stores `adapter` and `adapterData` so the executor cannot retarget Phase 2.
-  function startWorkflow(
+  function start(
     uint256 intentId,
     uint256 pullAmount,
     uint256 minSharesOut,
@@ -185,7 +185,7 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable {
   /// @dev Atomic sequence: `Facility.unlock` → `MorphoVaultV2.allocate` (skipped when
   ///      `allocateAmount == 0`) → `Facility.depositManager`. Slippage on `unlock` reverts the
   ///      whole transaction so the workflow remains in `Phase.COMMITTED` and can be retried.
-  function completeWorkflow(
+  function complete(
     uint256 intentId,
     uint256 allocateAmount,
     uint256 borrowAmount,
