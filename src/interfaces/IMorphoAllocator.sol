@@ -11,18 +11,6 @@ enum Phase {
   COMMITTED
 }
 
-/// @notice Per-intent workflow state stored between Phase 1 and Phase 2.
-/// @dev `adapter` and `adapterData` are locked in at Phase 1 to prevent the executor from
-///      retargeting allocation between phases.
-/// @param phase       Current lifecycle phase.
-/// @param adapter     Morpho Vault V2 adapter to allocate through in Phase 2.
-/// @param adapterData ABI-encoded adapter parameters used in Phase 2.
-struct PendingWorkflow {
-  Phase phase;
-  address adapter;
-  bytes adapterData;
-}
-
 /// @title IMorphoAllocator
 /// @author 3F Protocol
 /// @notice External API for the MorphoAllocator Smart Facilitator.
@@ -37,15 +25,17 @@ interface IMorphoAllocator {
   /// @notice Emitted when Phase 1 (pull + create + commit) succeeds for an intent.
   /// @param intentId   The intent ID.
   /// @param pullAmount The amount pulled from the Request and used as the fund order input.
-  /// @param adapter    The Morpho Vault V2 adapter locked in for the corresponding Phase 2.
-  event WorkflowStarted(uint256 indexed intentId, uint256 pullAmount, address adapter);
+  event WorkflowStarted(uint256 indexed intentId, uint256 pullAmount);
 
   /// @notice Emitted when Phase 2 (unlock + allocate + depositManager) succeeds for an intent.
   /// @param intentId       The intent ID.
   /// @param unlocked       The amount of collateral credited to the intent by `unlock`.
-  /// @param allocateAmount The amount reallocated through the locked-in adapter (0 if skipped).
+  /// @param adapter        The adapter liquidity was allocated through (ignored when allocateAmount == 0).
+  /// @param allocateAmount The amount reallocated through `adapter` (0 if skipped).
   /// @param borrowAmount   The amount borrowed via `Facility.depositManager`.
-  event WorkflowCompleted(uint256 indexed intentId, uint256 unlocked, uint256 allocateAmount, uint256 borrowAmount);
+  event WorkflowCompleted(
+    uint256 indexed intentId, uint256 unlocked, address adapter, uint256 allocateAmount, uint256 borrowAmount
+  );
 
   /// @notice Emitted when the executor role is granted to or revoked from an address.
   /// @param executor The affected address.
@@ -56,10 +46,10 @@ interface IMorphoAllocator {
   /*                           VIEWS                            */
   /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
 
-  /// @notice Returns the workflow state stored for an intent.
+  /// @notice Returns the workflow phase stored for an intent.
   /// @param intentId The intent ID.
-  /// @return The current `PendingWorkflow` (phase, adapter, adapterData).
-  function workflow(uint256 intentId) external view returns (PendingWorkflow memory);
+  /// @return The current `Phase` (IDLE or COMMITTED).
+  function workflow(uint256 intentId) external view returns (Phase);
 
   /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
   /*                          PHASES                            */
@@ -67,33 +57,28 @@ interface IMorphoAllocator {
 
   /// @notice Phase 1 — pull Bridge Facilitator funds from the Request, create a DEPOSIT fund
   ///         order against the intent's fund, and commit it.
-  /// @dev Requires the intent's workflow to be in `Phase.IDLE`. Stores `adapter` and
-  ///      `adapterData` so they cannot be replaced before Phase 2 runs.
+  /// @dev Requires the intent's workflow to be in `Phase.IDLE`.
   /// @param intentId     The intent ID.
   /// @param pullAmount   The amount of bridge-loan asset to pull and use as the order input.
   /// @param minSharesOut Minimum shares the DEPOSIT order must mint (slippage guard on fund side).
-  /// @param adapter      The Morpho Vault V2 adapter Phase 2 will allocate through.
-  /// @param adapterData  ABI-encoded adapter parameters used in Phase 2.
-  function start(
-    uint256 intentId,
-    uint256 pullAmount,
-    uint256 minSharesOut,
-    address adapter,
-    bytes calldata adapterData
-  ) external;
+  function start(uint256 intentId, uint256 pullAmount, uint256 minSharesOut) external;
 
   /// @notice Phase 2 — unlock the matured fund order, reallocate Morpho Vault V2 liquidity into
   ///         the target Morpho Blue market, then deposit the unlocked collateral and borrow.
   /// @dev Requires the intent's workflow to be in `Phase.COMMITTED`. Ordering inside the call is
   ///      unlock → allocate → depositManager. Allocation is skipped when `allocateAmount == 0`.
   /// @param intentId          The intent ID.
-  /// @param allocateAmount    Amount to allocate through the locked-in adapter (0 to skip).
+  /// @param adapter           The Morpho Vault V2 adapter to allocate through (ignored when allocateAmount == 0).
+  /// @param adapterData       ABI-encoded adapter parameters identifying the target market.
+  /// @param allocateAmount    Amount to allocate through `adapter` (0 to skip).
   /// @param borrowAmount      Amount to borrow via `Facility.depositManager`.
   /// @param useTarget         True to use the intent's target asset as the PositionManager,
   ///                          false to use the deposit asset.
   /// @param minSharesUnlocked Minimum amount that must be unlocked (slippage guard on unlock).
   function complete(
     uint256 intentId,
+    address adapter,
+    bytes calldata adapterData,
     uint256 allocateAmount,
     uint256 borrowAmount,
     bool useTarget,
