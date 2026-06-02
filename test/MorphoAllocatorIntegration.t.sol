@@ -17,7 +17,7 @@ import {IMorpho, MarketParams, Id, Market} from "@morpho-blue/interfaces/IMorpho
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 
 import {MorphoAllocator} from "src/MorphoAllocator.sol";
-import {IMorphoAllocator, Phase, Deallocation} from "src/interfaces/IMorphoAllocator.sol";
+import {IMorphoAllocator, Deallocation} from "src/interfaces/IMorphoAllocator.sol";
 
 import {MockFacility, MockPositionManager} from "./MorphoAllocator.t.sol";
 
@@ -232,7 +232,6 @@ contract MorphoAllocatorIntegrationTest is Test {
     assertEq(_supply(sourceMarket), SEED - 400e6, "source reduced by deallocation");
     assertEq(_supply(targetMarket), 400e6, "target received the allocation");
     assertEq(facility.depositManagerCount(), 1, "depositManager ran");
-    assertEq(uint256(allocator.workflow(INTENT_ID)), uint256(Phase.IDLE), "workflow reset");
   }
 
   function test_integration_idleSourceAllocatesIntoRealMarket() public {
@@ -270,10 +269,9 @@ contract MorphoAllocatorIntegrationTest is Test {
       INTENT_ID, _deal(address(adapter), sourceMarket, 300e6, 0.9e18), address(adapter), targetMarket, 0, true, 0
     );
 
-    // Atomic revert: nothing moved, workflow still committed.
+    // Atomic revert: nothing moved.
     assertEq(_supply(sourceMarket), SEED, "source unchanged");
     assertEq(_supply(targetMarket), 0, "target unchanged");
-    assertEq(uint256(allocator.workflow(INTENT_ID)), uint256(Phase.COMMITTED), "still committed");
   }
 
   function test_integration_dataEncodingAcceptedByRealAdapter() public {

@@ -3,16 +3,6 @@ pragma solidity ^0.8.22;
 
 import {MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
 
-/// @notice Lifecycle phase of an intent's workflow on the MorphoAllocator.
-/// @dev IDLE indicates no in-flight workflow; COMMITTED indicates Phase 1 has succeeded
-///      and Phase 2 is the only valid next step.
-enum Phase {
-  /// @notice No workflow is in flight for this intent.
-  IDLE,
-  /// @notice Phase 1 completed: a DEPOSIT fund order has been committed for this intent.
-  COMMITTED
-}
-
 /// @notice A single source from which Phase 2 gathers liquidity before allocating the total.
 /// @dev `adapter == address(0)` means `amount` is taken from the vault's idle liquidity: no
 ///      `deallocate` call is made and `marketParams`/`maxUtilisation` are ignored. Otherwise the
@@ -32,7 +22,7 @@ struct Deallocation {
 /// @title IMorphoAllocator
 /// @author 3F Protocol
 /// @notice External API for the MorphoAllocator Smart Facilitator.
-/// @dev Exposes events, views, admin, and the two workflow phase functions. The contract
+/// @dev Exposes events and the two workflow phase functions. The contract
 ///      implementing this interface must hold `FACILITATOR_ROLE` on the target Facility and
 ///      `isAllocator = true` on the target Morpho Vault V2.
 interface IMorphoAllocator {
@@ -62,22 +52,12 @@ interface IMorphoAllocator {
   event ExecutorSet(address indexed executor, bool enabled);
 
   /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
-  /*                           VIEWS                            */
-  /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
-
-  /// @notice Returns the workflow phase stored for an intent.
-  /// @param intentId The intent ID.
-  /// @return The current `Phase` (IDLE or COMMITTED).
-  function workflow(uint256 intentId) external view returns (Phase);
-
-  /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
   /*                          PHASES                            */
   /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
 
   /// @notice Phase 1 — pull Bridge Facilitator funds from the Request, create a DEPOSIT fund
   ///         order against the intent's fund, and commit it.
-  /// @dev Requires the intent's workflow to be in `Phase.IDLE`. Reverts unless the order is in
-  ///      `State.PROCESSING` after the commit.
+  /// @dev Reverts unless the order is in `State.PROCESSING` after the commit.
   /// @param intentId     The intent ID.
   /// @param pullAmount   The amount of bridge-loan asset to pull from the Request.
   /// @param commitAmount The DEPOSIT order input amount to create and commit (may differ from pullAmount).
@@ -87,7 +67,7 @@ interface IMorphoAllocator {
   /// @notice Phase 2 — unlock the matured fund order, rebalance Morpho Vault V2 liquidity by
   ///         deallocating from a set of source markets (or idle) and allocating the total into a
   ///         single destination market, then deposit the unlocked collateral and borrow.
-  /// @dev Requires the intent's workflow to be in `Phase.COMMITTED`. Ordering inside the call is
+  /// @dev Ordering inside the call is
   ///      unlock → (assert order ENDED) → deallocate(+utilisation checks) → allocate → depositManager.
   ///      The allocated total is the sum of `deallocations[i].amount`. Allocation is skipped when
   ///      `allocateAdapter == address(0)` (the gathered total stays as idle liquidity).

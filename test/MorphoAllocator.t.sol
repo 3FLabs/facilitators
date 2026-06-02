@@ -14,7 +14,7 @@ import {MarketParams, Id, Market} from "@morpho-blue/interfaces/IMorpho.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 
 import {MorphoAllocator} from "src/MorphoAllocator.sol";
-import {IMorphoAllocator, Phase, Deallocation} from "src/interfaces/IMorphoAllocator.sol";
+import {IMorphoAllocator, Deallocation} from "src/interfaces/IMorphoAllocator.sol";
 
 /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
 /*                            MOCKS                           */
@@ -382,10 +382,6 @@ contract MorphoAllocatorTest is Test {
     deals = new Deallocation[](0);
   }
 
-  function _expectInvalidPhase(Phase expected, Phase actual) internal {
-    vm.expectRevert(abi.encodeWithSelector(MorphoAllocator.InvalidPhase.selector, INTENT_ID, expected, actual));
-  }
-
   /*========== initialization ==========*/
 
   function test_initialize_setsState() public {
@@ -393,7 +389,6 @@ contract MorphoAllocatorTest is Test {
     assertEq(address(allocator.morphoVault()), address(vault), "vault");
     assertEq(allocator.owner(), owner, "owner");
     assertTrue(allocator.hasAnyRole(executor, 1), "executor role");
-    assertEq(uint256(allocator.workflow(INTENT_ID)), uint256(Phase.IDLE), "phase idle");
   }
 
   function test_initialize_revertsOnSecondCall() public {
@@ -431,7 +426,6 @@ contract MorphoAllocatorTest is Test {
     assertEq(uint256(cMode), uint256(Mode.DEPOSIT));
 
     assertEq(facility.lastCommitId(), INTENT_ID);
-    assertEq(uint256(allocator.workflow(INTENT_ID)), uint256(Phase.COMMITTED));
 
     // Ordering: pull → create → commit
     assertEq(facility.callOrder(0), "pull");
@@ -444,16 +438,6 @@ contract MorphoAllocatorTest is Test {
     vm.expectRevert(
       abi.encodeWithSelector(MorphoAllocator.UnexpectedOrderState.selector, State.PROCESSING, State.UNLOCKING)
     );
-    vm.prank(executor);
-    allocator.start(INTENT_ID, 1_000e6, 1_000e6, 0);
-
-    assertEq(uint256(allocator.workflow(INTENT_ID)), uint256(Phase.IDLE), "phase not advanced");
-  }
-
-  function test_start_revertsWhenNotIdle() public {
-    _startPhase1(1_000e6, 0);
-
-    _expectInvalidPhase(Phase.IDLE, Phase.COMMITTED);
     vm.prank(executor);
     allocator.start(INTENT_ID, 1_000e6, 1_000e6, 0);
   }
@@ -473,11 +457,19 @@ contract MorphoAllocatorTest is Test {
 
   /*========== complete ==========*/
 
-  function test_complete_revertsWhenNotCommitted() public {
+  function test_complete_runsWithoutStart() public {
+    // `complete` is independent of `start`: it may run even if `start` was never called on this
+    // contract (e.g. another facilitator committed the order). With the intent configured and
+    // unlock crediting collateral, the call goes through.
     _configureIntentWithTargetPm();
-    _expectInvalidPhase(Phase.COMMITTED, Phase.IDLE);
+    facility.setUnlockMint(collateralToken, 1_000e6);
+
     vm.prank(executor);
     allocator.complete(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 700e6, true, 0);
+
+    assertEq(vault.deallocateCount(), 1);
+    assertEq(vault.allocateCount(), 1);
+    assertEq(facility.depositManagerCount(), 1);
   }
 
   function test_complete_happyPath_useTarget() public {
@@ -511,8 +503,6 @@ contract MorphoAllocatorTest is Test {
     assertEq(dDeposit, 950e6);
     assertEq(dBorrow, 700e6);
     assertTrue(dUseTarget);
-
-    assertEq(uint256(allocator.workflow(INTENT_ID)), uint256(Phase.IDLE), "phase reset");
   }
 
   function test_complete_happyPath_useDeposit_noRebalance() public {
@@ -609,8 +599,6 @@ contract MorphoAllocatorTest is Test {
     );
     vm.prank(executor);
     allocator.complete(INTENT_ID, _deals(500e6, 0.5e18), allocAdapter, targetMarket, 0, true, 0);
-
-    assertEq(uint256(allocator.workflow(INTENT_ID)), uint256(Phase.COMMITTED), "still committed");
     assertEq(facility.depositManagerCount(), 0, "depositManager not called");
   }
 
@@ -628,7 +616,6 @@ contract MorphoAllocatorTest is Test {
 
     assertEq(vault.deallocateCount(), 0, "rebalance not reached");
     assertEq(facility.depositManagerCount(), 0);
-    assertEq(uint256(allocator.workflow(INTENT_ID)), uint256(Phase.COMMITTED), "still committed");
   }
 
   function test_complete_revertsOnSlippage() public {
@@ -643,7 +630,6 @@ contract MorphoAllocatorTest is Test {
     assertEq(vault.deallocateCount(), 0, "rebalance not reached");
     assertEq(vault.allocateCount(), 0, "allocate not called");
     assertEq(facility.depositManagerCount(), 0, "depositManager not called");
-    assertEq(uint256(allocator.workflow(INTENT_ID)), uint256(Phase.COMMITTED), "still committed");
   }
 
   function test_complete_revertsIfTargetNotPM() public {
@@ -671,8 +657,6 @@ contract MorphoAllocatorTest is Test {
     vm.expectRevert(MockVaultV2.NotAllocator.selector);
     vm.prank(executor);
     allocator.complete(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 700e6, true, 0);
-
-    assertEq(uint256(allocator.workflow(INTENT_ID)), uint256(Phase.COMMITTED), "still committed");
     assertEq(facility.depositManagerCount(), 0, "depositManager not called");
   }
 
@@ -716,9 +700,7 @@ contract MorphoAllocatorTest is Test {
     vm.prank(executor);
     allocator.multicall(calls);
 
-    assertEq(uint256(allocator.workflow(id1)), uint256(Phase.COMMITTED));
-    assertEq(uint256(allocator.workflow(id2)), uint256(Phase.COMMITTED));
-    assertEq(facility.commitCount(), 2);
+    assertEq(facility.commitCount(), 2, "both starts committed");
   }
 
   function test_multicall_preservesRoleGating() public {
@@ -747,19 +729,17 @@ contract MorphoAllocatorTest is Test {
     vm.prank(executor);
     allocator.start(id2, 2_000e6, 2_000e6, 0);
 
-    assertEq(uint256(allocator.workflow(id1)), uint256(Phase.COMMITTED));
-    assertEq(uint256(allocator.workflow(id2)), uint256(Phase.COMMITTED));
+    assertEq(facility.commitCount(), 2, "both intents started");
 
-    // Complete id2 first; id1 must remain COMMITTED.
+    // Completing id2 routes id2's own rebalance and deposit, independent of id1.
     facility.setUnlockMint(collateralToken, 1_500e6);
     vm.prank(executor);
     allocator.complete(id2, _deals(100e6, WAD), allocAdapter, targetMarket, 0, true, 0);
 
     (,, uint256 aAssets) = vault.lastAllocate();
-    assertEq(aAssets, 100e6);
-
-    assertEq(uint256(allocator.workflow(id1)), uint256(Phase.COMMITTED));
-    assertEq(uint256(allocator.workflow(id2)), uint256(Phase.IDLE));
+    assertEq(aAssets, 100e6, "id2 allocation routed");
+    (uint256 dId,,,) = facility.lastDepositManager();
+    assertEq(dId, id2, "depositManager ran for id2");
   }
 
   /*========== fuzz ==========*/
@@ -776,11 +756,11 @@ contract MorphoAllocatorTest is Test {
       vm.expectRevert(abi.encodeWithSelector(MorphoAllocator.SlippageExceeded.selector, minOut, actual));
       vm.prank(executor);
       allocator.complete(INTENT_ID, _noDeals(), address(0), targetMarket, 0, true, minOut);
-      assertEq(uint256(allocator.workflow(INTENT_ID)), uint256(Phase.COMMITTED));
+      assertEq(facility.depositManagerCount(), 0, "no deposit on slippage revert");
     } else {
       vm.prank(executor);
       allocator.complete(INTENT_ID, _noDeals(), address(0), targetMarket, 0, true, minOut);
-      assertEq(uint256(allocator.workflow(INTENT_ID)), uint256(Phase.IDLE));
+      assertEq(facility.depositManagerCount(), 1, "deposit on success");
     }
   }
 }

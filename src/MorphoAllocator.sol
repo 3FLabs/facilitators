@@ -17,7 +17,7 @@ import {IMorphoMarketV1AdapterV2} from "@vault-v2/adapters/interfaces/IMorphoMar
 import {IMorpho, MarketParams, Id, Market} from "@morpho-blue/interfaces/IMorpho.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 
-import {IMorphoAllocator, Phase, Deallocation} from "./interfaces/IMorphoAllocator.sol";
+import {IMorphoAllocator, Deallocation} from "./interfaces/IMorphoAllocator.sol";
 
 /// @title MorphoAllocator
 /// @author 3F Protocol
@@ -27,9 +27,10 @@ import {IMorphoAllocator, Phase, Deallocation} from "./interfaces/IMorphoAllocat
 ///         and runs `Facility.depositManager`.
 /// @dev Must hold `FACILITATOR_ROLE` on the target Facility and `isAllocator = true` on the
 ///      target Morpho Vault V2. Proxy-ready via Solady `Initializable` and ERC-7201 namespaced
-///      storage. Per-intent phase state guards Phase 2 behind Phase 1, and the Grunt order state
-///      is asserted (`PROCESSING` after commit, `ENDED` after unlock). Inherits `Multicallable`
-///      so the executor can batch calls. Assumes Morpho V1 Market adapters.
+///      storage. `start` and `complete` are independent — `complete` may run even if `start` was
+///      performed by another facilitator — and the Grunt order state is asserted (`PROCESSING`
+///      after commit, `ENDED` after unlock). Inherits `Multicallable` so the executor can batch
+///      calls. Assumes Morpho V1 Market adapters.
 contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable, Multicallable {
   using MarketParamsLib for MarketParams;
 
@@ -55,11 +56,9 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable, Multi
   ///      and accessed via a fixed storage slot to prevent collisions with inherited contracts.
   /// @param facility    The Grunt Facility this allocator is a facilitator on.
   /// @param morphoVault The Morpho Vault V2 this allocator can reallocate.
-  /// @param workflows   Per-intent workflow phase.
   struct MorphoAllocatorStorage {
     IFacility facility;
     IVaultV2 morphoVault;
-    mapping(uint256 intentId => Phase) workflows;
   }
 
   /// @dev Returns a reference to the contract's namespaced storage struct.
@@ -75,12 +74,6 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable, Multi
   /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
   /*                           ERRORS                           */
   /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
-
-  /// @notice Thrown when an intent's workflow is not in the required phase.
-  /// @param intentId The intent ID.
-  /// @param expected The phase the call requires.
-  /// @param actual   The phase currently stored.
-  error InvalidPhase(uint256 intentId, Phase expected, Phase actual);
 
   /// @notice Thrown when the amount credited to the intent on unlock is below the executor minimum.
   /// @param minOut Minimum expected amount.
@@ -161,11 +154,6 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable, Multi
   /*                           VIEWS                            */
   /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
 
-  /// @inheritdoc IMorphoAllocator
-  function workflow(uint256 intentId) external view override returns (Phase) {
-    return _allocatorStorage().workflows[intentId];
-  }
-
   /// @notice Returns the configured Facility address.
   /// @return The Grunt Facility this allocator coordinates.
   function facility() external view returns (IFacility) {
@@ -190,11 +178,7 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable, Multi
     override
     onlyRoles(EXECUTOR_ROLE)
   {
-    MorphoAllocatorStorage storage $ = _allocatorStorage();
-    Phase phase = $.workflows[intentId];
-    if (phase != Phase.IDLE) revert InvalidPhase(intentId, Phase.IDLE, phase);
-
-    IFacility _facility = $.facility;
+    IFacility _facility = _allocatorStorage().facility;
     _facility.pull(intentId, pullAmount);
     Order memory order = _facility.create(intentId, commitAmount, minSharesOut, Mode.DEPOSIT);
     _facility.commit(intentId);
@@ -202,8 +186,6 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable, Multi
     (, address fund,,) = _facility.getIntent(intentId);
     State orderState = IFund(fund).state(order);
     if (orderState != State.PROCESSING) revert UnexpectedOrderState(State.PROCESSING, orderState);
-
-    $.workflows[intentId] = Phase.COMMITTED;
 
     emit WorkflowStarted(intentId, pullAmount, commitAmount);
   }
@@ -216,8 +198,7 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable, Multi
   /// @dev Atomic sequence: `Facility.unlock` → assert order `State.ENDED` → deallocate each source
   ///      market (validating post-withdrawal utilisation) → `MorphoVaultV2.allocate` of the gathered
   ///      total (skipped when `allocateAdapter == address(0)`) → `Facility.depositManager`. Any revert
-  ///      (slippage, utilisation, unexpected state) reverts the whole call, leaving the workflow in
-  ///      `Phase.COMMITTED` for retry.
+  ///      (slippage, utilisation, unexpected state) reverts the whole call so it can be retried.
   function complete(
     uint256 intentId,
     Deallocation[] calldata deallocations,
@@ -228,9 +209,6 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable, Multi
     uint256 minSharesUnlocked
   ) external override onlyRoles(EXECUTOR_ROLE) {
     MorphoAllocatorStorage storage $ = _allocatorStorage();
-    Phase phase = $.workflows[intentId];
-    if (phase != Phase.COMMITTED) revert InvalidPhase(intentId, Phase.COMMITTED, phase);
-
     IFacility _facility = $.facility;
 
     (IntentProperties memory props, address fund,,) = _facility.getIntent(intentId);
@@ -257,7 +235,6 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable, Multi
 
     _facility.depositManager(intentId, unlocked, borrowAmount, useTarget);
 
-    delete $.workflows[intentId];
     emit WorkflowCompleted(intentId, unlocked, allocateAdapter, allocatedTotal, borrowAmount);
   }
 
