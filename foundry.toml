@@ -2,7 +2,10 @@
 src = "src"
 out = "out"
 libs = ["lib"]
-solc_version = "0.8.28"
+# No global solc_version pin: our contracts and Vault V2 compile with 0.8.28 (cancun),
+# while Morpho Blue and the Adaptive Curve IRM (pinned to 0.8.19, which predates cancun)
+# compile under the "999999-paris" profile below. Integration tests deploy the latter via
+# `deployCode`, and the test/imports/*Import.sol files force their compilation.
 evm_version = "cancun"
 via_ir = true
 optimizer = true
@@ -19,6 +22,37 @@ remappings = [
   "lib/morpho-blue/=lib/grunt/lib/morpho-blue/",
   "forge-std/=lib/forge-std/src/",
 ]
+
+# Pin our own sources and tests to 0.8.28 (cancun) so dropping the global solc pin does not
+# let Foundry also compile them under a newer installed solc (which would double-run the suite
+# and change the deployable bytecode).
+[[profile.default.compilation_restrictions]]
+paths = "src/**"
+version = "=0.8.28"
+
+[[profile.default.compilation_restrictions]]
+paths = "test/MorphoAllocator.t.sol"
+version = "=0.8.28"
+
+[[profile.default.compilation_restrictions]]
+paths = "test/MorphoAllocatorIntegration.t.sol"
+version = "=0.8.28"
+
+# Morpho Blue / Adaptive Curve IRM are solc 0.8.19 and cannot target cancun.
+[[profile.default.compilation_restrictions]]
+paths = "test/imports/MorphoImport.sol"
+optimizer_runs = 999999
+evm_version = "paris"
+
+[[profile.default.compilation_restrictions]]
+paths = "test/imports/AdaptiveCurveIrmImport.sol"
+optimizer_runs = 999999
+evm_version = "paris"
+
+[[profile.default.additional_compiler_profiles]]
+name = "999999-paris"
+optimizer_runs = 999999
+evm_version = "paris"
 
 [fmt]
 tab_width = 2
