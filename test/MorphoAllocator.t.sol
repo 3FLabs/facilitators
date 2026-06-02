@@ -310,7 +310,7 @@ contract MorphoAllocatorTest is Test {
   uint256 internal constant INTENT_ID = 7;
   uint256 internal constant WAD = 1e18;
 
-  event WorkflowStarted(uint256 indexed intentId, uint256 pullAmount, uint256 commitAmount);
+  event WorkflowStarted(uint256 indexed intentId, uint256 pullAmount, uint256 commitAmount, Order order);
   event WorkflowCompleted(
     uint256 indexed intentId, uint256 unlocked, address allocateAdapter, uint256 allocatedTotal, uint256 borrowAmount
   );
@@ -382,6 +382,18 @@ contract MorphoAllocatorTest is Test {
     deals = new Deallocation[](0);
   }
 
+  /// @dev The deterministic order MockFacility.create returns for a given commit amount.
+  function _expectedOrder(uint256 commitAmount) internal view returns (Order memory) {
+    return Order({
+      mode: Mode.DEPOSIT,
+      owner: address(facility),
+      receiver: address(facility),
+      input: commitAmount,
+      output: 0,
+      salt: bytes32(0)
+    });
+  }
+
   /*========== initialization ==========*/
 
   function test_initialize_setsState() public {
@@ -407,7 +419,7 @@ contract MorphoAllocatorTest is Test {
   function test_start_happyPath() public {
     // pullAmount and commitAmount differ to prove `create` is wired to commitAmount.
     vm.expectEmit(true, false, false, true, address(allocator));
-    emit WorkflowStarted(INTENT_ID, 1_000e6, 900e6);
+    emit WorkflowStarted(INTENT_ID, 1_000e6, 900e6, _expectedOrder(900e6));
 
     vm.prank(executor);
     allocator.start(INTENT_ID, 1_000e6, 900e6, 880e6);
@@ -431,6 +443,16 @@ contract MorphoAllocatorTest is Test {
     assertEq(facility.callOrder(0), "pull");
     assertEq(facility.callOrder(1), "create");
     assertEq(facility.callOrder(2), "commit");
+  }
+
+  function test_start_emitsOrder() public {
+    // The created+committed order is surfaced in the event; its `input` is the commitAmount
+    // (distinct from pullAmount here to prove the wiring).
+    vm.expectEmit(true, false, false, true, address(allocator));
+    emit WorkflowStarted(INTENT_ID, 2_000e6, 1_234e6, _expectedOrder(1_234e6));
+
+    vm.prank(executor);
+    allocator.start(INTENT_ID, 2_000e6, 1_234e6, 0);
   }
 
   function test_start_revertsWhenOrderNotProcessing() public {

@@ -187,7 +187,7 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable, Multi
     State orderState = IFund(fund).state(order);
     if (orderState != State.PROCESSING) revert UnexpectedOrderState(State.PROCESSING, orderState);
 
-    emit WorkflowStarted(intentId, pullAmount, commitAmount);
+    emit WorkflowStarted(intentId, pullAmount, commitAmount, order);
   }
 
   /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/

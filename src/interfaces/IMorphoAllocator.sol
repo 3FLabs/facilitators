@@ -2,6 +2,7 @@
 pragma solidity ^0.8.22;
 
 import {MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
+import {Order} from "@grunt/libs/funds/Order.sol";
 
 /// @notice A single source from which Phase 2 gathers liquidity before allocating the total.
 /// @dev `adapter == address(0)` means `amount` is taken from the vault's idle liquidity: no
@@ -34,7 +35,8 @@ interface IMorphoAllocator {
   /// @param intentId     The intent ID.
   /// @param pullAmount   The amount pulled from the Request.
   /// @param commitAmount The fund order input amount that was created and committed.
-  event WorkflowStarted(uint256 indexed intentId, uint256 pullAmount, uint256 commitAmount);
+  /// @param order        The fund order created and committed for the intent.
+  event WorkflowStarted(uint256 indexed intentId, uint256 pullAmount, uint256 commitAmount, Order order);
 
   /// @notice Emitted when Phase 2 (unlock + deallocate + allocate + depositManager) succeeds.
   /// @param intentId        The intent ID.
