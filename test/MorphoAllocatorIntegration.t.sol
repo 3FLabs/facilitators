@@ -226,7 +226,7 @@ contract MorphoAllocatorIntegrationTest is Test {
 
     // Deallocate 400e6 from source, allocate the total (400e6) into target.
     allocator.complete(
-      INTENT_ID, _deal(address(adapter), sourceMarket, 400e6, WAD), address(adapter), targetMarket, 0, true, 0
+      INTENT_ID, _deal(address(adapter), sourceMarket, 400e6, WAD), address(adapter), targetMarket, 500e6, 0, true, 0
     );
 
     assertEq(_supply(sourceMarket), SEED - 400e6, "source reduced by deallocation");
@@ -239,7 +239,7 @@ contract MorphoAllocatorIntegrationTest is Test {
     Deallocation[] memory deals = new Deallocation[](1);
     deals[0] = Deallocation({adapter: address(0), marketParams: sourceMarket, amount: 250e6, maxUtilisation: 0});
 
-    allocator.complete(INTENT_ID, deals, address(adapter), targetMarket, 0, true, 0);
+    allocator.complete(INTENT_ID, deals, address(adapter), targetMarket, 500e6, 0, true, 0);
 
     assertEq(_supply(sourceMarket), SEED, "source untouched (idle was the source)");
     assertEq(_supply(targetMarket), 250e6, "target funded from idle");
@@ -250,7 +250,7 @@ contract MorphoAllocatorIntegrationTest is Test {
 
     // Deallocate 100e6 → source supply 900e6, utilisation 700/900 ≈ 0.777e18 < 0.9e18 cap.
     allocator.complete(
-      INTENT_ID, _deal(address(adapter), sourceMarket, 100e6, 0.9e18), address(adapter), targetMarket, 0, true, 0
+      INTENT_ID, _deal(address(adapter), sourceMarket, 100e6, 0.9e18), address(adapter), targetMarket, 500e6, 0, true, 0
     );
 
     assertEq(_supply(sourceMarket), SEED - 100e6, "source reduced");
@@ -266,7 +266,7 @@ contract MorphoAllocatorIntegrationTest is Test {
       abi.encodeWithSelector(MorphoAllocator.MaxUtilisationExceeded.selector, address(adapter), expectedUtil, 0.9e18)
     );
     allocator.complete(
-      INTENT_ID, _deal(address(adapter), sourceMarket, 300e6, 0.9e18), address(adapter), targetMarket, 0, true, 0
+      INTENT_ID, _deal(address(adapter), sourceMarket, 300e6, 0.9e18), address(adapter), targetMarket, 0, 0, true, 0
     );
 
     // Atomic revert: nothing moved.
@@ -279,7 +279,7 @@ contract MorphoAllocatorIntegrationTest is Test {
     // decodes, the real morpho.withdraw/supply would revert. A clean run proves the seam works.
     uint256 targetBefore = _supply(targetMarket);
     allocator.complete(
-      INTENT_ID, _deal(address(adapter), sourceMarket, 123e6, WAD), address(adapter), targetMarket, 0, true, 0
+      INTENT_ID, _deal(address(adapter), sourceMarket, 123e6, WAD), address(adapter), targetMarket, 500e6, 0, true, 0
     );
     assertEq(_supply(targetMarket) - targetBefore, 123e6, "exact amount routed into the target market");
   }

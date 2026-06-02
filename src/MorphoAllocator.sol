@@ -199,11 +199,13 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable, Multi
   ///      market (validating post-withdrawal utilisation) → `MorphoVaultV2.allocate` of the gathered
   ///      total (skipped when `allocateAdapter == address(0)`) → `Facility.depositManager`. Any revert
   ///      (slippage, utilisation, unexpected state) reverts the whole call so it can be retried.
+  ///      `depositAmount` is the caller's choice and need not equal the measured `unlocked` amount.
   function complete(
     uint256 intentId,
     Deallocation[] calldata deallocations,
     address allocateAdapter,
     MarketParams calldata allocateMarket,
+    uint256 depositAmount,
     uint256 borrowAmount,
     bool useTarget,
     uint256 minSharesUnlocked
@@ -233,7 +235,7 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable, Multi
 
     uint256 allocatedTotal = _rebalance($.morphoVault, deallocations, allocateAdapter, allocateMarket);
 
-    _facility.depositManager(intentId, unlocked, borrowAmount, useTarget);
+    _facility.depositManager(intentId, depositAmount, borrowAmount, useTarget);
 
     emit WorkflowCompleted(intentId, unlocked, allocateAdapter, allocatedTotal, borrowAmount);
   }
@@ -258,7 +260,7 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable, Multi
     MarketParams calldata allocateMarket
   ) private returns (uint256 total) {
     uint256 length = deallocations.length;
-    for (uint256 i = 0; i < length; i++) {
+    for (uint256 i; i < length; i++) {
       Deallocation calldata d = deallocations[i];
       total += d.amount;
       if (d.adapter != address(0)) {
@@ -308,7 +310,7 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable, Multi
   {
     (address[] memory tokens, uint256[] memory amounts) = _facility.intentBalances(intentId);
     uint256 length = tokens.length;
-    for (uint256 i = 0; i < length; i++) {
+    for (uint256 i; i < length; i++) {
       if (tokens[i] == token) return amounts[i];
     }
     return 0;

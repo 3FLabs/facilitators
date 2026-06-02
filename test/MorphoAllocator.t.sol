@@ -487,7 +487,7 @@ contract MorphoAllocatorTest is Test {
     facility.setUnlockMint(collateralToken, 1_000e6);
 
     vm.prank(executor);
-    allocator.complete(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 700e6, true, 0);
+    allocator.complete(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 1_000e6, 700e6, true, 0);
 
     assertEq(vault.deallocateCount(), 1);
     assertEq(vault.allocateCount(), 1);
@@ -503,7 +503,7 @@ contract MorphoAllocatorTest is Test {
     emit WorkflowCompleted(INTENT_ID, 950e6, allocAdapter, 500e6, 700e6);
 
     vm.prank(executor);
-    allocator.complete(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 700e6, true, 900e6);
+    allocator.complete(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 950e6, 700e6, true, 900e6);
 
     // Deallocation withdrew 500e6 from the source market.
     assertEq(vault.deallocateCount(), 1);
@@ -527,13 +527,29 @@ contract MorphoAllocatorTest is Test {
     assertTrue(dUseTarget);
   }
 
+  function test_complete_depositAmountIndependentOfUnlocked() public {
+    _configureIntentWithTargetPm();
+    _startPhase1(1_000e6, 0);
+    facility.setUnlockMint(collateralToken, 1_000e6); // full unlock = 1_000e6
+
+    // Deposit only 600e6 of the 1_000e6 unlocked; the event still reports the full unlocked amount.
+    vm.expectEmit(true, false, false, true, address(allocator));
+    emit WorkflowCompleted(INTENT_ID, 1_000e6, allocAdapter, 500e6, 700e6);
+
+    vm.prank(executor);
+    allocator.complete(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 600e6, 700e6, true, 0);
+
+    (, uint256 dDeposit,,) = facility.lastDepositManager();
+    assertEq(dDeposit, 600e6, "depositManager uses the provided amount, not unlocked");
+  }
+
   function test_complete_happyPath_useDeposit_noRebalance() public {
     _configureIntentWithDepositPm();
     _startPhase1(1_000e6, 0);
     facility.setUnlockMint(collateralToken, 1_000e6);
 
     vm.prank(executor);
-    allocator.complete(INTENT_ID, _noDeals(), address(0), targetMarket, 700e6, false, 0);
+    allocator.complete(INTENT_ID, _noDeals(), address(0), targetMarket, 1_000e6, 700e6, false, 0);
 
     assertEq(vault.deallocateCount(), 0, "no deallocation");
     assertEq(vault.allocateCount(), 0, "allocate skipped (no sources)");
@@ -555,7 +571,7 @@ contract MorphoAllocatorTest is Test {
     deals[0] = Deallocation({adapter: address(0), marketParams: sourceMarket, amount: 300e6, maxUtilisation: 0});
 
     vm.prank(executor);
-    allocator.complete(INTENT_ID, deals, allocAdapter, targetMarket, 0, true, 0);
+    allocator.complete(INTENT_ID, deals, allocAdapter, targetMarket, 1_000e6, 0, true, 0);
 
     assertEq(vault.deallocateCount(), 0, "no deallocate for idle source");
     assertEq(vault.allocateCount(), 1, "allocate of gathered total");
@@ -574,7 +590,7 @@ contract MorphoAllocatorTest is Test {
     deals[1] = Deallocation({adapter: address(0), marketParams: sourceMarket, amount: 300e6, maxUtilisation: 0});
 
     vm.prank(executor);
-    allocator.complete(INTENT_ID, deals, allocAdapter, targetMarket, 0, true, 0);
+    allocator.complete(INTENT_ID, deals, allocAdapter, targetMarket, 1_000e6, 0, true, 0);
 
     assertEq(vault.deallocateCount(), 1, "only the market source deallocates");
     assertEq(vault.allocateCount(), 1);
@@ -589,7 +605,7 @@ contract MorphoAllocatorTest is Test {
 
     // Gather 500e6 from a market but leave it idle (allocateAdapter == 0).
     vm.prank(executor);
-    allocator.complete(INTENT_ID, _deals(500e6, WAD), address(0), targetMarket, 0, true, 0);
+    allocator.complete(INTENT_ID, _deals(500e6, WAD), address(0), targetMarket, 1_000e6, 0, true, 0);
 
     assertEq(vault.deallocateCount(), 1, "still deallocates the source");
     assertEq(vault.allocateCount(), 0, "allocate skipped when adapter == 0");
@@ -602,7 +618,7 @@ contract MorphoAllocatorTest is Test {
     facility.setUnlockMint(collateralToken, 1_000e6);
 
     vm.prank(executor);
-    allocator.complete(INTENT_ID, _noDeals(), allocAdapter, targetMarket, 700e6, true, 0);
+    allocator.complete(INTENT_ID, _noDeals(), allocAdapter, targetMarket, 1_000e6, 700e6, true, 0);
 
     assertEq(vault.allocateCount(), 0, "total is zero, allocate skipped");
     assertEq(facility.depositManagerCount(), 1);
@@ -620,7 +636,7 @@ contract MorphoAllocatorTest is Test {
       abi.encodeWithSelector(MorphoAllocator.MaxUtilisationExceeded.selector, address(dealAdapter), 0.9e18, 0.5e18)
     );
     vm.prank(executor);
-    allocator.complete(INTENT_ID, _deals(500e6, 0.5e18), allocAdapter, targetMarket, 0, true, 0);
+    allocator.complete(INTENT_ID, _deals(500e6, 0.5e18), allocAdapter, targetMarket, 0, 0, true, 0);
     assertEq(facility.depositManagerCount(), 0, "depositManager not called");
   }
 
@@ -634,7 +650,7 @@ contract MorphoAllocatorTest is Test {
       abi.encodeWithSelector(MorphoAllocator.UnexpectedOrderState.selector, State.ENDED, State.PROCESSING)
     );
     vm.prank(executor);
-    allocator.complete(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 0, true, 0);
+    allocator.complete(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 0, 0, true, 0);
 
     assertEq(vault.deallocateCount(), 0, "rebalance not reached");
     assertEq(facility.depositManagerCount(), 0);
@@ -647,7 +663,7 @@ contract MorphoAllocatorTest is Test {
 
     vm.expectRevert(abi.encodeWithSelector(MorphoAllocator.SlippageExceeded.selector, 900e6, 800e6));
     vm.prank(executor);
-    allocator.complete(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 700e6, true, 900e6);
+    allocator.complete(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 950e6, 700e6, true, 900e6);
 
     assertEq(vault.deallocateCount(), 0, "rebalance not reached");
     assertEq(vault.allocateCount(), 0, "allocate not called");
@@ -665,7 +681,7 @@ contract MorphoAllocatorTest is Test {
 
     vm.expectRevert(abi.encodeWithSelector(MorphoAllocator.TargetNotPositionManager.selector, INTENT_ID, true));
     vm.prank(executor);
-    allocator.complete(INTENT_ID, _noDeals(), allocAdapter, targetMarket, 0, true, 0);
+    allocator.complete(INTENT_ID, _noDeals(), allocAdapter, targetMarket, 0, 0, true, 0);
   }
 
   function test_complete_revertsWhenAllocatorRoleMissing() public {
@@ -678,7 +694,7 @@ contract MorphoAllocatorTest is Test {
     // The first vault interaction (deallocate) reverts on the missing allocator role.
     vm.expectRevert(MockVaultV2.NotAllocator.selector);
     vm.prank(executor);
-    allocator.complete(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 700e6, true, 0);
+    allocator.complete(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 1_000e6, 700e6, true, 0);
     assertEq(facility.depositManagerCount(), 0, "depositManager not called");
   }
 
@@ -690,7 +706,7 @@ contract MorphoAllocatorTest is Test {
     uint256 phase1End = facility.callOrderLength();
 
     vm.prank(executor);
-    allocator.complete(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 700e6, true, 0);
+    allocator.complete(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 1_000e6, 700e6, true, 0);
 
     // unlock lands first, depositManager last; the vault deallocate/allocate happen in between.
     assertEq(facility.callOrder(phase1End), "unlock");
@@ -706,7 +722,7 @@ contract MorphoAllocatorTest is Test {
 
     vm.expectRevert();
     vm.prank(stranger);
-    allocator.complete(INTENT_ID, _noDeals(), allocAdapter, targetMarket, 0, true, 0);
+    allocator.complete(INTENT_ID, _noDeals(), allocAdapter, targetMarket, 0, 0, true, 0);
   }
 
   /*========== multicall ==========*/
@@ -756,7 +772,7 @@ contract MorphoAllocatorTest is Test {
     // Completing id2 routes id2's own rebalance and deposit, independent of id1.
     facility.setUnlockMint(collateralToken, 1_500e6);
     vm.prank(executor);
-    allocator.complete(id2, _deals(100e6, WAD), allocAdapter, targetMarket, 0, true, 0);
+    allocator.complete(id2, _deals(100e6, WAD), allocAdapter, targetMarket, 1_500e6, 0, true, 0);
 
     (,, uint256 aAssets) = vault.lastAllocate();
     assertEq(aAssets, 100e6, "id2 allocation routed");
@@ -777,11 +793,11 @@ contract MorphoAllocatorTest is Test {
     if (actual < minOut) {
       vm.expectRevert(abi.encodeWithSelector(MorphoAllocator.SlippageExceeded.selector, minOut, actual));
       vm.prank(executor);
-      allocator.complete(INTENT_ID, _noDeals(), address(0), targetMarket, 0, true, minOut);
+      allocator.complete(INTENT_ID, _noDeals(), address(0), targetMarket, actual, 0, true, minOut);
       assertEq(facility.depositManagerCount(), 0, "no deposit on slippage revert");
     } else {
       vm.prank(executor);
-      allocator.complete(INTENT_ID, _noDeals(), address(0), targetMarket, 0, true, minOut);
+      allocator.complete(INTENT_ID, _noDeals(), address(0), targetMarket, actual, 0, true, minOut);
       assertEq(facility.depositManagerCount(), 1, "deposit on success");
     }
   }

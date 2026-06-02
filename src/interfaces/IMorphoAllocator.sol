@@ -77,6 +77,8 @@ interface IMorphoAllocator {
   /// @param deallocations     Sources to gather liquidity from (markets and/or idle); see {Deallocation}.
   /// @param allocateAdapter   Destination Morpho V1 Market adapter, or address(0) to skip allocation.
   /// @param allocateMarket    Destination market identifier (ignored when `allocateAdapter == address(0)`).
+  /// @param depositAmount     Collateral amount to deposit via `Facility.depositManager`. Independent
+  ///                          of the unlocked amount, so the caller may deposit less than was unlocked.
   /// @param borrowAmount      Amount to borrow via `Facility.depositManager`.
   /// @param useTarget         True to use the intent's target asset as the PositionManager,
   ///                          false to use the deposit asset.
@@ -86,6 +88,7 @@ interface IMorphoAllocator {
     Deallocation[] calldata deallocations,
     address allocateAdapter,
     MarketParams calldata allocateMarket,
+    uint256 depositAmount,
     uint256 borrowAmount,
     bool useTarget,
     uint256 minSharesUnlocked
