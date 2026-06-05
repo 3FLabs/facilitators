@@ -17,7 +17,6 @@ import {IMorpho, MarketParams, Id, Market} from "@morpho-blue/interfaces/IMorpho
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 
 import {MorphoAllocator} from "src/MorphoAllocator.sol";
-import {IMorphoAllocator, Deallocation} from "src/interfaces/IMorphoAllocator.sol";
 
 import {MockFacility, MockPositionManager} from "./MorphoAllocator.t.sol";
 
@@ -79,7 +78,7 @@ contract TestOracle {
 /*                      INTEGRATION TESTS                     */
 /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
 
-/// @notice End-to-end tests of MorphoAllocator.complete against a REAL Morpho Vault V2 +
+/// @notice End-to-end tests of MorphoAllocator.run against a REAL Morpho Vault V2 +
 ///         MorphoMarketV1AdapterV2 + Morpho Blue. Only the Grunt Facility leg is mocked; the
 ///         deallocate/allocate rebalance and the utilisation check run against real contracts.
 contract MorphoAllocatorIntegrationTest is Test {
@@ -169,14 +168,13 @@ contract MorphoAllocatorIntegrationTest is Test {
     vault.deposit(DEPOSIT, address(this));
     vault.allocate(address(adapter), abi.encode(sourceMarket), SEED);
 
-    // --- Grunt leg: configure the intent (target = PositionManager) and start the workflow ---
+    // --- Grunt leg: configure the intent (target = PositionManager) ---
     facility.setFacilitator(address(allocator), true);
     IntentProperties memory props;
     props.depositAsset = Asset({asset: address(0xDA), isPositionManager: false});
     props.targetAsset = Asset({asset: address(pm), isPositionManager: true});
     facility.setIntent(INTENT_ID, props);
 
-    allocator.start(INTENT_ID, 1_000e6, 1_000e6, 0);
     facility.setUnlockMint(gruntCollateral, 500e6);
   }
 
@@ -200,10 +198,11 @@ contract MorphoAllocatorIntegrationTest is Test {
   function _deal(address adapterAddr, MarketParams memory mp, uint256 amount, uint256 maxUtil)
     internal
     pure
-    returns (Deallocation[] memory deals)
+    returns (MorphoAllocator.Deallocation[] memory deals)
   {
-    deals = new Deallocation[](1);
-    deals[0] = Deallocation({adapter: adapterAddr, marketParams: mp, amount: amount, maxUtilisation: maxUtil});
+    deals = new MorphoAllocator.Deallocation[](1);
+    deals[0] =
+      MorphoAllocator.Deallocation({adapter: adapterAddr, marketParams: mp, amount: amount, maxUtilisation: maxUtil});
   }
 
   /// @dev Borrow `amount` from `mp` (backed by ample collateral) to create real utilisation.
@@ -225,7 +224,7 @@ contract MorphoAllocatorIntegrationTest is Test {
     assertEq(_supply(targetMarket), 0, "target empty");
 
     // Deallocate 400e6 from source, allocate the total (400e6) into target.
-    allocator.complete(
+    allocator.run(
       INTENT_ID, _deal(address(adapter), sourceMarket, 400e6, WAD), address(adapter), targetMarket, 500e6, 0, true, 0
     );
 
@@ -236,10 +235,11 @@ contract MorphoAllocatorIntegrationTest is Test {
 
   function test_integration_idleSourceAllocatesIntoRealMarket() public {
     // adapter == address(0): source the amount from the vault's idle liquidity, allocate into target.
-    Deallocation[] memory deals = new Deallocation[](1);
-    deals[0] = Deallocation({adapter: address(0), marketParams: sourceMarket, amount: 250e6, maxUtilisation: 0});
+    MorphoAllocator.Deallocation[] memory deals = new MorphoAllocator.Deallocation[](1);
+    deals[0] =
+      MorphoAllocator.Deallocation({adapter: address(0), marketParams: sourceMarket, amount: 250e6, maxUtilisation: 0});
 
-    allocator.complete(INTENT_ID, deals, address(adapter), targetMarket, 500e6, 0, true, 0);
+    allocator.run(INTENT_ID, deals, address(adapter), targetMarket, 500e6, 0, true, 0);
 
     assertEq(_supply(sourceMarket), SEED, "source untouched (idle was the source)");
     assertEq(_supply(targetMarket), 250e6, "target funded from idle");
@@ -249,7 +249,7 @@ contract MorphoAllocatorIntegrationTest is Test {
     _createUtilisation(sourceMarket, 700e6); // utilisation 0.7e18
 
     // Deallocate 100e6 → source supply 900e6, utilisation 700/900 ≈ 0.777e18 < 0.9e18 cap.
-    allocator.complete(
+    allocator.run(
       INTENT_ID, _deal(address(adapter), sourceMarket, 100e6, 0.9e18), address(adapter), targetMarket, 500e6, 0, true, 0
     );
 
@@ -265,7 +265,7 @@ contract MorphoAllocatorIntegrationTest is Test {
     vm.expectRevert(
       abi.encodeWithSelector(MorphoAllocator.MaxUtilisationExceeded.selector, address(adapter), expectedUtil, 0.9e18)
     );
-    allocator.complete(
+    allocator.run(
       INTENT_ID, _deal(address(adapter), sourceMarket, 300e6, 0.9e18), address(adapter), targetMarket, 0, 0, true, 0
     );
 
@@ -278,7 +278,7 @@ contract MorphoAllocatorIntegrationTest is Test {
     // If the abi.encode(MarketParams) the allocator emits did not match what the real adapter
     // decodes, the real morpho.withdraw/supply would revert. A clean run proves the seam works.
     uint256 targetBefore = _supply(targetMarket);
-    allocator.complete(
+    allocator.run(
       INTENT_ID, _deal(address(adapter), sourceMarket, 123e6, WAD), address(adapter), targetMarket, 500e6, 0, true, 0
     );
     assertEq(_supply(targetMarket) - targetBefore, 123e6, "exact amount routed into the target market");

@@ -17,29 +17,64 @@ import {IMorphoMarketV1AdapterV2} from "@vault-v2/adapters/interfaces/IMorphoMar
 import {IMorpho, MarketParams, Id, Market} from "@morpho-blue/interfaces/IMorpho.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 
-import {IMorphoAllocator, Deallocation} from "./interfaces/IMorphoAllocator.sol";
-
 /// @title MorphoAllocator
 /// @author 3F Protocol
-/// @notice First Grunt Smart Facilitator: atomically commits a fund DEPOSIT order in Phase 1,
-///         then in Phase 2 unlocks the matured shares, rebalances Morpho Vault V2 liquidity
-///         (deallocating from source markets or idle and allocating the total into one market),
-///         and runs `Facility.depositManager`.
+/// @notice Grunt Smart Facilitator script: unlocks a matured fund DEPOSIT order, rebalances Morpho
+///         Vault V2 liquidity (deallocating from source markets or idle and allocating the total
+///         into one market), and runs `Facility.depositManager`.
 /// @dev Must hold `FACILITATOR_ROLE` on the target Facility and `isAllocator = true` on the
 ///      target Morpho Vault V2. Proxy-ready via Solady `Initializable` and ERC-7201 namespaced
-///      storage. `start` and `complete` are independent — `complete` may run even if `start` was
-///      performed by another facilitator — and the Grunt order state is asserted (`PROCESSING`
-///      after commit, `ENDED` after unlock). Inherits `Multicallable` so the executor can batch
-///      calls. Assumes Morpho V1 Market adapters.
-contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable, Multicallable {
+///      storage. The committed DEPOSIT order may have been created by any facilitator (e.g. the
+///      CommitDeposit script); this contract only asserts the Grunt order is `ENDED` after unlock.
+///      Inherits `Multicallable` so the executor can batch calls. Assumes Morpho V1 Market adapters.
+contract MorphoAllocator is OwnableRoles, Initializable, Multicallable {
   using MarketParamsLib for MarketParams;
+
+  /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
+  /*                           STRUCTS                          */
+  /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
+
+  /// @notice A single source from which `run` gathers liquidity before allocating the total.
+  /// @dev `adapter == address(0)` means `amount` is taken from the vault's idle liquidity: no
+  ///      `deallocate` call is made and `marketParams`/`maxUtilisation` are ignored. Otherwise the
+  ///      Morpho Vault V2 `deallocate(adapter, abi.encode(marketParams), amount)` withdraws `amount`
+  ///      from the market, after which that market's utilisation must be `<= maxUtilisation`.
+  /// @param adapter        Morpho V1 Market adapter to deallocate from, or address(0) for idle liquidity.
+  /// @param marketParams   Source market identifier (ignored when `adapter == address(0)`).
+  /// @param amount         Assets to source from this entry; contributes to the allocated total.
+  /// @param maxUtilisation Post-deallocation utilisation cap in WAD (ignored when `adapter == address(0)`).
+  struct Deallocation {
+    address adapter;
+    MarketParams marketParams;
+    uint256 amount;
+    uint256 maxUtilisation;
+  }
 
   /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
   /*                           ROLES                            */
   /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
 
-  /// @notice Role for addresses authorized to trigger workflow phases.
+  /// @notice Role for addresses authorized to trigger the `run` workflow.
   uint256 internal constant EXECUTOR_ROLE = _ROLE_0;
+
+  /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
+  /*                          EVENTS                            */
+  /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
+
+  /// @notice Emitted when `run` (unlock + deallocate + allocate + depositManager) succeeds.
+  /// @param intentId        The intent ID.
+  /// @param unlocked        The amount of collateral credited to the intent by `unlock`.
+  /// @param allocateAdapter The adapter the gathered total was allocated through (address(0) if skipped).
+  /// @param allocatedTotal  The total gathered from the deallocations and allocated (0 if skipped).
+  /// @param borrowAmount    The amount borrowed via `Facility.depositManager`.
+  event Allocated(
+    uint256 indexed intentId, uint256 unlocked, address allocateAdapter, uint256 allocatedTotal, uint256 borrowAmount
+  );
+
+  /// @notice Emitted when the executor role is granted to or revoked from an address.
+  /// @param executor The affected address.
+  /// @param enabled  True if granted, false if revoked.
+  event ExecutorSet(address indexed executor, bool enabled);
 
   /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
   /*                          STORAGE                           */
@@ -167,40 +202,28 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable, Multi
   }
 
   /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
-  /*                          PHASE 1                           */
+  /*                            RUN                             */
   /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
 
-  /// @inheritdoc IMorphoAllocator
-  /// @dev Atomic sequence: `Facility.pull(pullAmount)` → `Facility.create(commitAmount, DEPOSIT)`
-  ///      → `Facility.commit` → assert the order is in `State.PROCESSING`.
-  function start(uint256 intentId, uint256 pullAmount, uint256 commitAmount, uint256 minSharesOut)
-    external
-    override
-    onlyRoles(EXECUTOR_ROLE)
-  {
-    IFacility _facility = _allocatorStorage().facility;
-    _facility.pull(intentId, pullAmount);
-    Order memory order = _facility.create(intentId, commitAmount, minSharesOut, Mode.DEPOSIT);
-    _facility.commit(intentId);
-
-    (, address fund,,) = _facility.getIntent(intentId);
-    State orderState = IFund(fund).state(order);
-    if (orderState != State.PROCESSING) revert UnexpectedOrderState(State.PROCESSING, orderState);
-
-    emit WorkflowStarted(intentId, pullAmount, commitAmount, order);
-  }
-
-  /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
-  /*                          PHASE 2                           */
-  /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
-
-  /// @inheritdoc IMorphoAllocator
+  /// @notice Unlock the matured fund order, rebalance Morpho Vault V2 liquidity by deallocating from a
+  ///         set of source markets (or idle) and allocating the total into a single destination market,
+  ///         then deposit the unlocked collateral and borrow.
   /// @dev Atomic sequence: `Facility.unlock` → assert order `State.ENDED` → deallocate each source
   ///      market (validating post-withdrawal utilisation) → `MorphoVaultV2.allocate` of the gathered
   ///      total (skipped when `allocateAdapter == address(0)`) → `Facility.depositManager`. Any revert
   ///      (slippage, utilisation, unexpected state) reverts the whole call so it can be retried.
   ///      `depositAmount` is the caller's choice and need not equal the measured `unlocked` amount.
-  function complete(
+  /// @param intentId          The intent ID.
+  /// @param deallocations     Sources to gather liquidity from (markets and/or idle); see {Deallocation}.
+  /// @param allocateAdapter   Destination Morpho V1 Market adapter, or address(0) to skip allocation.
+  /// @param allocateMarket    Destination market identifier (ignored when `allocateAdapter == address(0)`).
+  /// @param depositAmount     Collateral amount to deposit via `Facility.depositManager`. Independent
+  ///                          of the unlocked amount, so the caller may deposit less than was unlocked.
+  /// @param borrowAmount      Amount to borrow via `Facility.depositManager`.
+  /// @param useTarget         True to use the intent's target asset as the PositionManager,
+  ///                          false to use the deposit asset.
+  /// @param minSharesUnlocked Minimum amount that must be unlocked (slippage guard on unlock).
+  function run(
     uint256 intentId,
     Deallocation[] calldata deallocations,
     address allocateAdapter,
@@ -209,7 +232,7 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable, Multi
     uint256 borrowAmount,
     bool useTarget,
     uint256 minSharesUnlocked
-  ) external override onlyRoles(EXECUTOR_ROLE) {
+  ) external onlyRoles(EXECUTOR_ROLE) {
     MorphoAllocatorStorage storage $ = _allocatorStorage();
     IFacility _facility = $.facility;
 
@@ -237,7 +260,7 @@ contract MorphoAllocator is IMorphoAllocator, OwnableRoles, Initializable, Multi
 
     _facility.depositManager(intentId, depositAmount, borrowAmount, useTarget);
 
-    emit WorkflowCompleted(intentId, unlocked, allocateAdapter, allocatedTotal, borrowAmount);
+    emit Allocated(intentId, unlocked, allocateAdapter, allocatedTotal, borrowAmount);
   }
 
   /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/

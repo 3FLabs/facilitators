@@ -38,6 +38,10 @@ version = "=0.8.28"
 paths = "test/MorphoAllocatorIntegration.t.sol"
 version = "=0.8.28"
 
+[[profile.default.compilation_restrictions]]
+paths = "test/CommitDeposit.t.sol"
+version = "=0.8.28"
+
 # Morpho Blue / Adaptive Curve IRM are solc 0.8.19 and cannot target cancun.
 [[profile.default.compilation_restrictions]]
 paths = "test/imports/MorphoImport.sol"
