@@ -58,6 +58,13 @@ name = "999999-paris"
 optimizer_runs = 999999
 evm_version = "paris"
 
+[lint]
+# `forge build` runs the linter, which needs each source's AST. The test/imports/*Import.sol shims only
+# force Morpho / Adaptive Curve IRM (solc 0.8.19) to compile so `deployCode` resolves them; they build in
+# a separate profile whose AST the linter cannot load ("AST source not found"). No per-file ignore covers
+# that preload, so disable lint-on-build and run `forge lint` explicitly when needed.
+lint_on_build = false
+
 [fmt]
 tab_width = 2
 

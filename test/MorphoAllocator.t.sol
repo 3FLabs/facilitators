@@ -381,7 +381,7 @@ contract MorphoAllocatorTest is Test {
 
   /*========== initialization ==========*/
 
-  function test_initialize_setsState() public {
+  function test_initialize_setsState() public view {
     assertEq(address(allocator.facility()), address(facility), "facility");
     assertEq(address(allocator.morphoVault()), address(vault), "vault");
     assertEq(allocator.owner(), owner, "owner");

@@ -55,7 +55,7 @@ contract CommitDepositTest is Test {
 
   /*========== initialization ==========*/
 
-  function test_initialize_setsState() public {
+  function test_initialize_setsState() public view {
     assertEq(address(commitDeposit.facility()), address(facility), "facility");
     assertEq(commitDeposit.owner(), owner, "owner");
     assertTrue(commitDeposit.hasAnyRole(executor, 1), "executor role");
