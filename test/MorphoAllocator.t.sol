@@ -310,7 +310,7 @@ contract MorphoAllocatorTest is Test {
   uint256 internal constant WAD = 1e18;
 
   event Allocated(
-    uint256 indexed intentId, uint256 unlocked, address allocateAdapter, uint256 allocatedTotal, uint256 borrowAmount
+    uint256 indexed intentId, uint256 unlocked, address allocateAdapter, uint256 gatheredTotal, uint256 borrowAmount
   );
   event ExecutorSet(address indexed executor, bool enabled);
 
@@ -522,7 +522,11 @@ contract MorphoAllocatorTest is Test {
     _configureIntentWithTargetPm();
     facility.setUnlockMint(collateralToken, 1_000e6);
 
-    // Gather 500e6 from a market but leave it idle (allocateAdapter == 0).
+    // Gather 500e6 from a market but leave it idle (allocateAdapter == 0). The event still reports
+    // the gathered total (500e6), not zero, even though no allocation happened.
+    vm.expectEmit(true, false, false, true, address(allocator));
+    emit Allocated(INTENT_ID, 1_000e6, address(0), 500e6, 0);
+
     vm.prank(executor);
     allocator.run(INTENT_ID, _deals(500e6, WAD), address(0), targetMarket, 1_000e6, 0, true, 0);
 

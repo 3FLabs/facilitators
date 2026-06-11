@@ -3,7 +3,6 @@ pragma solidity ^0.8.22;
 
 import {Initializable} from "solady/utils/Initializable.sol";
 import {OwnableRoles} from "solady/auth/OwnableRoles.sol";
-import {Multicallable} from "solady/utils/Multicallable.sol";
 
 import {IFacility} from "@grunt/interfaces/facility/IFacility.sol";
 import {Mode, Order, State} from "@grunt/libs/funds/Order.sol";
@@ -13,9 +12,8 @@ import {IFund} from "@grunt/interfaces/funds/IFund.sol";
 /// @author 3F Protocol
 /// @notice Grunt Smart Facilitator script: pulls Bridge Facilitator funds from the Request, creates a
 ///         fund DEPOSIT order against the intent's fund, and commits it (asserting `PROCESSING`).
-/// @dev Must hold `FACILITATOR_ROLE` on the target Facility. Proxy-ready via Solady `Initializable`
-///      and ERC-7201 namespaced storage. Inherits `Multicallable` so the executor can batch calls.
-contract CommitDeposit is OwnableRoles, Initializable, Multicallable {
+/// @dev Must hold `FACILITATOR_ROLE` on the target Facility. Proxy-ready via Solady `Initializable`.
+contract CommitDeposit is OwnableRoles, Initializable {
   /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
   /*                           ROLES                            */
   /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
@@ -34,9 +32,11 @@ contract CommitDeposit is OwnableRoles, Initializable, Multicallable {
   /// @param order        The fund order created and committed for the intent.
   event DepositCommitted(uint256 indexed intentId, uint256 pullAmount, uint256 commitAmount, Order order);
 
-  /// @notice Emitted when the executor role is granted to or revoked from an address.
-  /// @param executor The affected address.
-  /// @param enabled  True if granted, false if revoked.
+  /// @notice Emitted during initialization when the initial executor is granted EXECUTOR_ROLE.
+  /// @dev Only fired from `initialize`. Post-deployment executor changes go through the inherited
+  ///      `grantRoles`/`revokeRoles`, which emit Solady's `RolesUpdated` instead of this event.
+  /// @param executor The address granted EXECUTOR_ROLE at initialization.
+  /// @param enabled  Always true; the initializer only ever grants the role.
   event ExecutorSet(address indexed executor, bool enabled);
 
   /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/

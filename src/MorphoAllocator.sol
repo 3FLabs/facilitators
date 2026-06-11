@@ -3,7 +3,6 @@ pragma solidity ^0.8.22;
 
 import {Initializable} from "solady/utils/Initializable.sol";
 import {OwnableRoles} from "solady/auth/OwnableRoles.sol";
-import {Multicallable} from "solady/utils/Multicallable.sol";
 
 import {IFacility} from "@grunt/interfaces/facility/IFacility.sol";
 import {IPositionManager} from "@grunt/interfaces/manager/IPositionManager.sol";
@@ -26,8 +25,7 @@ import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 ///      target Morpho Vault V2. Proxy-ready via Solady `Initializable` and ERC-7201 namespaced
 ///      storage. The committed DEPOSIT order may have been created by any facilitator (e.g. the
 ///      CommitDeposit script); this contract only asserts the Grunt order is `ENDED` after unlock.
-///      Inherits `Multicallable` so the executor can batch calls. Assumes Morpho V1 Market adapters.
-contract MorphoAllocator is OwnableRoles, Initializable, Multicallable {
+contract MorphoAllocator is OwnableRoles, Initializable {
   using MarketParamsLib for MarketParams;
 
   /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
@@ -64,16 +62,21 @@ contract MorphoAllocator is OwnableRoles, Initializable, Multicallable {
   /// @notice Emitted when `run` (unlock + deallocate + allocate + depositManager) succeeds.
   /// @param intentId        The intent ID.
   /// @param unlocked        The amount of collateral credited to the intent by `unlock`.
-  /// @param allocateAdapter The adapter the gathered total was allocated through (address(0) if skipped).
-  /// @param allocatedTotal  The total gathered from the deallocations and allocated (0 if skipped).
+  /// @param allocateAdapter The destination adapter as passed to `run`; address(0) when no allocation
+  ///                        was requested. Allocation is also skipped when `gatheredTotal` is 0.
+  /// @param gatheredTotal   The total gathered across all deallocation sources. Allocated into
+  ///                        `allocateAdapter` when both it and the total are non-zero; otherwise the
+  ///                        gathered liquidity is left idle in the vault.
   /// @param borrowAmount    The amount borrowed via `Facility.depositManager`.
   event Allocated(
-    uint256 indexed intentId, uint256 unlocked, address allocateAdapter, uint256 allocatedTotal, uint256 borrowAmount
+    uint256 indexed intentId, uint256 unlocked, address allocateAdapter, uint256 gatheredTotal, uint256 borrowAmount
   );
 
-  /// @notice Emitted when the executor role is granted to or revoked from an address.
-  /// @param executor The affected address.
-  /// @param enabled  True if granted, false if revoked.
+  /// @notice Emitted during initialization when the initial executor is granted EXECUTOR_ROLE.
+  /// @dev Only fired from `initialize`. Post-deployment executor changes go through the inherited
+  ///      `grantRoles`/`revokeRoles`, which emit Solady's `RolesUpdated` instead of this event.
+  /// @param executor The address granted EXECUTOR_ROLE at initialization.
+  /// @param enabled  Always true; the initializer only ever grants the role.
   event ExecutorSet(address indexed executor, bool enabled);
 
   /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
@@ -256,11 +259,11 @@ contract MorphoAllocator is OwnableRoles, Initializable, Multicallable {
     uint256 unlocked = balanceAfter - balanceBefore;
     if (unlocked < minSharesUnlocked) revert SlippageExceeded(minSharesUnlocked, unlocked);
 
-    uint256 allocatedTotal = _rebalance($.morphoVault, deallocations, allocateAdapter, allocateMarket);
+    uint256 gatheredTotal = _rebalance($.morphoVault, deallocations, allocateAdapter, allocateMarket);
 
     _facility.depositManager(intentId, depositAmount, borrowAmount, useTarget);
 
-    emit Allocated(intentId, unlocked, allocateAdapter, allocatedTotal, borrowAmount);
+    emit Allocated(intentId, unlocked, allocateAdapter, gatheredTotal, borrowAmount);
   }
 
   /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/

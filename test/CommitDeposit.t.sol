@@ -135,32 +135,6 @@ contract CommitDepositTest is Test {
     commitDeposit.run(INTENT_ID, 1_000e6, 1_000e6, 0);
   }
 
-  /*========== multicall ==========*/
-
-  function test_multicall_batchesRuns() public {
-    uint256 id1 = INTENT_ID;
-    uint256 id2 = INTENT_ID + 1;
-
-    bytes[] memory calls = new bytes[](2);
-    calls[0] = abi.encodeCall(CommitDeposit.run, (id1, uint256(1_000e6), uint256(1_000e6), uint256(0)));
-    calls[1] = abi.encodeCall(CommitDeposit.run, (id2, uint256(2_000e6), uint256(2_000e6), uint256(0)));
-
-    vm.prank(executor);
-    commitDeposit.multicall(calls);
-
-    assertEq(facility.commitCount(), 2, "both runs committed");
-  }
-
-  function test_multicall_preservesRoleGating() public {
-    bytes[] memory calls = new bytes[](1);
-    calls[0] = abi.encodeCall(CommitDeposit.run, (INTENT_ID, uint256(1_000e6), uint256(1_000e6), uint256(0)));
-
-    // msg.sender is preserved through the delegatecall, so a non-executor is still rejected.
-    vm.expectRevert();
-    vm.prank(stranger);
-    commitDeposit.multicall(calls);
-  }
-
   /*========== multiple intents ==========*/
 
   function test_multipleIntentsIndependent() public {
