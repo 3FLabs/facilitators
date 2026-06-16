@@ -31,6 +31,10 @@ paths = "src/**"
 version = "=0.8.28"
 
 [[profile.default.compilation_restrictions]]
+paths = "script/**"
+version = "=0.8.28"
+
+[[profile.default.compilation_restrictions]]
 paths = "test/MorphoAllocator.t.sol"
 version = "=0.8.28"
 
