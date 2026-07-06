@@ -54,6 +54,7 @@ contract MockFacility {
   mapping(uint256 => address[]) internal _tokens;
   mapping(uint256 => mapping(address => bool)) internal _tokenSeenByIntent;
   mapping(uint256 => Order) internal _orders;
+  mapping(uint256 => uint256) internal _totalSupply;
 
   // Unlock knob: amount of `unlockToken` to credit to the intent on `unlock`.
   uint256 public unlockMintAmount;
@@ -88,6 +89,10 @@ contract MockFacility {
 
   function setIntent(uint256 id, IntentProperties memory props) external {
     _props[id] = props;
+  }
+
+  function setTotalSupply(uint256 id, uint256 supply) external {
+    _totalSupply[id] = supply;
   }
 
   function setIntentBalance(uint256 id, address token, uint256 amount) external {
@@ -187,6 +192,10 @@ contract MockFacility {
 
   function getOrder(uint256 id) external view returns (Order memory order, bytes32 orderId) {
     return (_orders[id], bytes32(0));
+  }
+
+  function totalSupply(uint256 id) external view returns (uint256) {
+    return _totalSupply[id];
   }
 
   /// @notice Stand-in for `IFund.state(Order)` — the allocator queries this after commit/unlock.
