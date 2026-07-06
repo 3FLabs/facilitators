@@ -22,13 +22,13 @@ contract DeployDepositCapStateGuard is Script {
   /*                         ADDRESSES                          */
   /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
 
-  /// @notice CREATE2 salt; zero, as there is no need to grind a vanity address.
-  bytes32 internal constant SALT = bytes32(0);
+  /// @notice CREATE2 salt, ground so the guard's address starts with `0x3fa77e57` ("3F ATTEST").
+  /// @dev `cast create2 --deployer 0x4e59b44847b379578588920cA78FbF26c0B4956C --starts-with 3fa77e57
+  ///      --init-code-hash keccak256(creationCode)` with the profile-default compiler settings.
+  bytes32 internal constant SALT = 0x7fde142edeac1c4c898e276a070df232a649cda0a4e930355b1f72abb019de8a;
 
   /// @notice Deterministic deployment address of the guard on every chain.
-  /// @dev `cast create2 --deployer 0x4e59b44847b379578588920cA78FbF26c0B4956C --salt 0x00..00
-  ///      --init-code-hash keccak256(creationCode)` with the profile-default compiler settings.
-  address internal constant EXPECTED_ADDRESS = 0x657e7A53e825F52546Ec95b21c1CB43833490307;
+  address internal constant EXPECTED_ADDRESS = 0x3Fa77E57baC28940621d1aaE1a136058c4064623;
 
   /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
   /*                           ERRORS                           */

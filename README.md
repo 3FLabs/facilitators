@@ -51,13 +51,13 @@ The guard is unpermissioned (anyone may call it with any arguments), holds no st
 
 ### Deployment
 
-`script/DeployDepositCapStateGuard.s.sol` deploys the guard through the canonical CREATE2 factory (`0x4e59b44847b379578588920cA78FbF26c0B4956C`) with salt `bytes32(0)`, giving the same address on every chain:
+`script/DeployDepositCapStateGuard.s.sol` deploys the guard through the canonical CREATE2 factory (`0x4e59b44847b379578588920cA78FbF26c0B4956C`) with a salt ground for a `0x3fa77e57` ("3F ATTEST") vanity prefix, giving the same address on every chain:
 
 ```
-DepositCapStateGuard: 0x657e7A53e825F52546Ec95b21c1CB43833490307
+DepositCapStateGuard: 0x3Fa77E57baC28940621d1aaE1a136058c4064623
 ```
 
-The script asserts the deployment lands on this address and reverts otherwise. The address is a pure function of the init code: recompute it (and update the script constant and this README) if the guard source or the compiler profile changes.
+The script asserts the deployment lands on this address and reverts otherwise. The address is a pure function of the init code and the salt: re-grind the salt (and update the script constants and this README) if the guard source or the compiler profile changes.
 
 ## Roles & trust assumptions
 
