@@ -37,7 +37,7 @@ contract DeployMorphoAllocator is Script {
   /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
 
   /// @notice Solady ERC1967Factory used to deploy the upgradeable proxy.
-  IERC1967Factory internal constant FACTORY = IERC1967Factory(0x54F862fa0612A8709F6Dec4A7B39AF015CD4E82E);
+  IERC1967Factory internal constant FACTORY = IERC1967Factory(0x0000000000006396FF2a80c067f99B3d2Ab4Df24);
 
   /// @notice Grunt Facility proxy the allocator coordinates (`facility_`).
   address internal constant FACILITY = 0x4e013ca8fF612a58F53C822904cDD0eC538a4A4F;
