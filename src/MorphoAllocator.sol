@@ -61,7 +61,8 @@ contract MorphoAllocator is OwnableRoles, Initializable {
 
   /// @notice Emitted when `run` (unlock + deallocate + allocate + depositManager) succeeds.
   /// @param intentId        The intent ID.
-  /// @param unlocked        The amount of collateral credited to the intent by `unlock`.
+  /// @param unlocked        The amount of collateral credited to the intent by `unlock`, deposited in
+  ///                        full via `Facility.depositManager`.
   /// @param allocateAdapter The destination adapter as passed to `run`; address(0) when no allocation
   ///                        was requested. Allocation is also skipped when `gatheredTotal` is 0.
   /// @param gatheredTotal   The total gathered across all deallocation sources. Allocated into
@@ -215,23 +216,25 @@ contract MorphoAllocator is OwnableRoles, Initializable {
   ///      market (validating post-withdrawal utilisation) → `MorphoVaultV2.allocate` of the gathered
   ///      total (skipped when `allocateAdapter == address(0)`) → `Facility.depositManager`. Any revert
   ///      (slippage, utilisation, unexpected state) reverts the whole call so it can be retried.
-  ///      `depositAmount` is the caller's choice and need not equal the measured `unlocked` amount.
+  ///      The measured `unlocked` amount is deposited in full, so the intent is left with no
+  ///      collateral dust regardless of unlock slippage or fund price movement.
   /// @param intentId          The intent ID.
   /// @param deallocations     Sources to gather liquidity from (markets and/or idle); see {Deallocation}.
   /// @param allocateAdapter   Destination Morpho V1 Market adapter, or address(0) to skip allocation.
   /// @param allocateMarket    Destination market identifier (ignored when `allocateAdapter == address(0)`).
-  /// @param depositAmount     Collateral amount to deposit via `Facility.depositManager`. Independent
-  ///                          of the unlocked amount, so the caller may deposit less than was unlocked.
+  /// @param minAmountReceived Minimum amount that must be unlocked. Occupies the slot that previously
+  ///                          fixed the deposit amount, keeping the signature unchanged for callers.
   /// @param borrowAmount      Amount to borrow via `Facility.depositManager`.
   /// @param useTarget         True to use the intent's target asset as the PositionManager,
   ///                          false to use the deposit asset.
-  /// @param minSharesUnlocked Minimum amount that must be unlocked (slippage guard on unlock).
+  /// @param minSharesUnlocked Minimum amount that must be unlocked (slippage guard on unlock); the
+  ///                          stricter of it and `minAmountReceived` applies.
   function run(
     uint256 intentId,
     Deallocation[] calldata deallocations,
     address allocateAdapter,
     MarketParams calldata allocateMarket,
-    uint256 depositAmount,
+    uint256 minAmountReceived,
     uint256 borrowAmount,
     bool useTarget,
     uint256 minSharesUnlocked
@@ -257,11 +260,12 @@ contract MorphoAllocator is OwnableRoles, Initializable {
       revert UnlockBalanceDecreased(intentId, balanceBefore, balanceAfter);
     }
     uint256 unlocked = balanceAfter - balanceBefore;
-    if (unlocked < minSharesUnlocked) revert SlippageExceeded(minSharesUnlocked, unlocked);
+    uint256 minUnlocked = minAmountReceived > minSharesUnlocked ? minAmountReceived : minSharesUnlocked;
+    if (unlocked < minUnlocked) revert SlippageExceeded(minUnlocked, unlocked);
 
     uint256 gatheredTotal = _rebalance($.morphoVault, deallocations, allocateAdapter, allocateMarket);
 
-    _facility.depositManager(intentId, depositAmount, borrowAmount, useTarget);
+    _facility.depositManager(intentId, unlocked, borrowAmount, useTarget);
 
     emit Allocated(intentId, unlocked, allocateAdapter, gatheredTotal, borrowAmount);
   }
