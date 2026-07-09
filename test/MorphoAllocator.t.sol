@@ -448,11 +448,12 @@ contract MorphoAllocatorTest is Test {
     assertTrue(dUseTarget);
   }
 
-  function test_run_depositAmountIndependentOfUnlocked() public {
+  function test_run_depositsUnlockedAmount() public {
     _configureIntentWithTargetPm();
     facility.setUnlockMint(collateralToken, 1_000e6); // full unlock = 1_000e6
 
-    // Deposit only 600e6 of the 1_000e6 unlocked; the event still reports the full unlocked amount.
+    // minAmountReceived (600e6) is below the 1_000e6 unlocked; the full unlocked amount is
+    // deposited, leaving no collateral dust on the intent.
     vm.expectEmit(true, false, false, true, address(allocator));
     emit Allocated(INTENT_ID, 1_000e6, allocAdapter, 500e6, 700e6);
 
@@ -460,7 +461,19 @@ contract MorphoAllocatorTest is Test {
     allocator.run(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 600e6, 700e6, true, 0);
 
     (, uint256 dDeposit,,) = facility.lastDepositManager();
-    assertEq(dDeposit, 600e6, "depositManager uses the provided amount, not unlocked");
+    assertEq(dDeposit, 1_000e6, "depositManager uses the measured unlocked amount");
+  }
+
+  function test_run_revertsWhenUnlockedBelowMinAmountReceived() public {
+    _configureIntentWithTargetPm();
+    facility.setUnlockMint(collateralToken, 1_000e6);
+
+    // minAmountReceived (1_100e6) is stricter than minSharesUnlocked (900e6) and above the
+    // 1_000e6 actually unlocked, so the unlock slippage guard trips.
+    vm.expectRevert(abi.encodeWithSelector(MorphoAllocator.SlippageExceeded.selector, 1_100e6, 1_000e6));
+    vm.prank(executor);
+    allocator.run(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 1_100e6, 700e6, true, 900e6);
+    assertEq(facility.depositManagerCount(), 0, "depositManager not called");
   }
 
   function test_run_happyPath_useDeposit_noRebalance() public {
@@ -582,7 +595,7 @@ contract MorphoAllocatorTest is Test {
 
     vm.expectRevert(abi.encodeWithSelector(MorphoAllocator.SlippageExceeded.selector, 900e6, 800e6));
     vm.prank(executor);
-    allocator.run(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 950e6, 700e6, true, 900e6);
+    allocator.run(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 0, 700e6, true, 900e6);
 
     assertEq(vault.deallocateCount(), 0, "rebalance not reached");
     assertEq(vault.allocateCount(), 0, "allocate not called");
@@ -680,6 +693,8 @@ contract MorphoAllocatorTest is Test {
       vm.prank(executor);
       allocator.run(INTENT_ID, _noDeals(), address(0), targetMarket, actual, 0, true, minOut);
       assertEq(facility.depositManagerCount(), 1, "deposit on success");
+      (, uint256 dDeposit,,) = facility.lastDepositManager();
+      assertEq(dDeposit, actual, "deposit equals the unlocked amount");
     }
   }
 }
