@@ -1,6 +1,6 @@
 # Facilitators
 
-Smart Facilitator scripts for the Grunt Protocol. Each contract in `src/` is a permissioned automation script that holds `FACILITATOR_ROLE` on a Grunt Facility and executes one multi-step phase of an intent's deposit lifecycle atomically: either every step succeeds, or the whole call reverts and can be retried.
+Smart Facilitator scripts for the Grunt Protocol. The facilitator contracts in `src/` are permissioned automation scripts that hold `FACILITATOR_ROLE` on a Grunt Facility and execute phases of an intent's deposit lifecycle atomically: either every step succeeds, or the whole call reverts and can be retried.
 
 Two facilitators exist today, covering the two ends of a fund DEPOSIT order's life:
 
@@ -57,7 +57,7 @@ The guard is unpermissioned (anyone may call it with any arguments), holds no st
 DepositCapStateGuard: 0x3Fa77E57baC28940621d1aaE1a136058c4064623
 ```
 
-The script asserts the deployment lands on this address and reverts otherwise. The address is a pure function of the init code and the salt: re-grind the salt (and update the script constants and this README) if the guard source or the compiler profile changes.
+The script restores the metadata digest used by the already deployed init code, verifies its full hash, and checks that code exists at this address after deployment. This keeps the address stable when only compiler metadata changes. Executable-code changes require a new deployment address and updated integrations.
 
 ## Roles & trust assumptions
 

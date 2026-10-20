@@ -12,11 +12,9 @@ import {DepositCapStateGuard} from "../src/checks/DepositCapStateGuard.sol";
 ///         (`0x4e59b44847b379578588920cA78FbF26c0B4956C`, forge-std's `CREATE2_FACTORY`), so the
 ///         guard lands at the same address on every chain. The contract holds no state, takes no
 ///         constructor arguments, and needs no proxy or initialization.
-/// @dev Salted `new` inside a broadcast is routed through the canonical factory by forge. The
-///      resulting address is pinned in `EXPECTED_ADDRESS` and asserted after deployment: it is a
-///      pure function of the init code, so it only moves if the source or the compiler profile
-///      (solc 0.8.28, via-ir, 200 optimizer runs, cancun) changes — a mismatch means this script's
-///      constant and the README are stale and must be recomputed.
+/// @dev The already-deployed address depends on the original init code, including its Solidity
+///      metadata hash. Restore that hash before calling the canonical factory, and verify the full
+///      init code hash so changes to executable code cannot silently deploy an outdated contract.
 contract DeployDepositCapStateGuard is Script {
   /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
   /*                         ADDRESSES                          */
@@ -30,14 +28,25 @@ contract DeployDepositCapStateGuard is Script {
   /// @notice Deterministic deployment address of the guard on every chain.
   address internal constant EXPECTED_ADDRESS = 0x3Fa77E57baC28940621d1aaE1a136058c4064623;
 
+  /// @dev The first 930 bytes of the 973-byte init code are executable code. The next 32 bytes
+  ///      are the IPFS digest in Solidity's CBOR metadata, which can vary between build contexts.
+  bytes32 internal constant DEPLOYED_METADATA_DIGEST =
+    0x0cf1aea5547025eafdd9a16c8ed54a7ff01a00dbcc5c313365d3208df9a9ff44;
+  bytes32 internal constant EXPECTED_INIT_CODE_HASH =
+    0x45021accaf3fbe28289aa96bae09aee2851c456f5b3d5d130b5c6374805ffa26;
+
   /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
   /*                           ERRORS                           */
   /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
 
-  /// @notice Thrown when the CREATE2 deployment does not land on `EXPECTED_ADDRESS`.
-  /// @param expected The pinned deterministic address.
-  /// @param actual   The address the guard actually deployed to.
-  error UnexpectedGuardAddress(address expected, address actual);
+  /// @notice Thrown when the expected address has no deployed code after the factory call.
+  error GuardCodeMissing(address expected);
+
+  /// @notice Thrown if the compiled init code differs from the code deployed on existing chains.
+  error UnexpectedGuardInitCode();
+
+  /// @notice Thrown if the canonical CREATE2 factory rejects the deployment.
+  error GuardDeploymentFailed();
 
   /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
   /*                            RUN                             */
@@ -45,14 +54,22 @@ contract DeployDepositCapStateGuard is Script {
 
   /// @notice Deploys the guard via CREATE2 and asserts the deterministic address.
   function run() external {
-    vm.startBroadcast();
-    DepositCapStateGuard guard = new DepositCapStateGuard{salt: SALT}();
-    vm.stopBroadcast();
+    bytes memory initCode = type(DepositCapStateGuard).creationCode;
+    if (initCode.length != 973) revert UnexpectedGuardInitCode();
 
-    if (address(guard) != EXPECTED_ADDRESS) {
-      revert UnexpectedGuardAddress(EXPECTED_ADDRESS, address(guard));
+    bytes32 metadataDigest = DEPLOYED_METADATA_DIGEST;
+    assembly ("memory-safe") {
+      mstore(add(add(initCode, 0x20), 930), metadataDigest)
     }
+    if (keccak256(initCode) != EXPECTED_INIT_CODE_HASH) revert UnexpectedGuardInitCode();
 
-    console2.log("DepositCapStateGuard:", address(guard));
+    vm.startBroadcast();
+    (bool success,) = CREATE2_FACTORY.call(abi.encodePacked(SALT, initCode));
+    vm.stopBroadcast();
+    if (!success) revert GuardDeploymentFailed();
+
+    if (EXPECTED_ADDRESS.code.length == 0) revert GuardCodeMissing(EXPECTED_ADDRESS);
+
+    console2.log("DepositCapStateGuard:", EXPECTED_ADDRESS);
   }
 }
