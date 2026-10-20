@@ -3,6 +3,7 @@ pragma solidity ^0.8.22;
 
 import {Test} from "forge-std/Test.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
+import {Ownable} from "solady/auth/Ownable.sol";
 
 import {IFacility} from "@grunt/interfaces/facility/IFacility.sol";
 import {IntentProperties, Asset} from "@grunt/libs/facility/LibIntent.sol";
@@ -651,6 +652,87 @@ contract MorphoAllocatorTest is Test {
     vm.expectRevert();
     vm.prank(stranger);
     allocator.run(INTENT_ID, _noDeals(), allocAdapter, targetMarket, 0, 0, true, 0);
+  }
+
+  /*========== runInKind ==========*/
+
+  function test_runInKind_happyPath() public {
+    // In-kind intent: the collateral is already on the intent and there is no fund order to unlock.
+    _configureIntentWithTargetPm();
+
+    vm.expectEmit(true, false, false, true, address(allocator));
+    emit Allocated(INTENT_ID, 800e6, allocAdapter, 500e6, 700e6);
+
+    vm.prank(executor);
+    allocator.runInKind(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 800e6, 700e6, true);
+
+    assertEq(facility.unlockCount(), 0, "no unlock for in-kind intents");
+
+    assertEq(vault.deallocateCount(), 1);
+    (address dAdapter, bytes memory dData, uint256 dAssets) = vault.lastDeallocate();
+    assertEq(dAdapter, address(dealAdapter), "deallocate adapter");
+    assertEq(dData, abi.encode(sourceMarket), "deallocate data");
+    assertEq(dAssets, 500e6, "deallocate amount");
+
+    assertEq(vault.allocateCount(), 1);
+    (address aAdapter, bytes memory aData, uint256 aAssets) = vault.lastAllocate();
+    assertEq(aAdapter, allocAdapter, "allocate adapter");
+    assertEq(aData, abi.encode(targetMarket), "allocate data");
+    assertEq(aAssets, 500e6, "allocate total");
+
+    assertEq(facility.depositManagerCount(), 1);
+    (uint256 dId, uint256 dDeposit, uint256 dBorrow, bool dUseTarget) = facility.lastDepositManager();
+    assertEq(dId, INTENT_ID);
+    assertEq(dDeposit, 800e6, "deposits the executor-supplied amount");
+    assertEq(dBorrow, 700e6);
+    assertTrue(dUseTarget);
+  }
+
+  function test_runInKind_skipsAllocateWhenAdapterZero() public {
+    _configureIntentWithDepositPm();
+
+    vm.expectEmit(true, false, false, true, address(allocator));
+    emit Allocated(INTENT_ID, 1_000e6, address(0), 500e6, 0);
+
+    vm.prank(executor);
+    allocator.runInKind(INTENT_ID, _deals(500e6, WAD), address(0), targetMarket, 1_000e6, 0, false);
+
+    assertEq(vault.deallocateCount(), 1, "still deallocates the source");
+    assertEq(vault.allocateCount(), 0, "allocate skipped when adapter == 0");
+    (,,, bool dUseTarget) = facility.lastDepositManager();
+    assertFalse(dUseTarget);
+  }
+
+  function test_runInKind_revertsOnMaxUtilisation() public {
+    _configureIntentWithTargetPm();
+
+    // Source market at 90% utilisation (900e6 / 1000e6); cap at 50%.
+    morpho.setMarket(sourceMarket.id(), 1_000e6, 900e6);
+
+    vm.expectRevert(
+      abi.encodeWithSelector(MorphoAllocator.MaxUtilisationExceeded.selector, address(dealAdapter), 0.9e18, 0.5e18)
+    );
+    vm.prank(executor);
+    allocator.runInKind(INTENT_ID, _deals(500e6, 0.5e18), allocAdapter, targetMarket, 1_000e6, 700e6, true);
+  }
+
+  function test_runInKind_revertsIfTargetNotPM() public {
+    IntentProperties memory props;
+    props.depositAsset = Asset({asset: address(0xDA), isPositionManager: false});
+    props.targetAsset = Asset({asset: address(0xFA), isPositionManager: false});
+    facility.setIntent(INTENT_ID, props);
+
+    vm.expectRevert(abi.encodeWithSelector(MorphoAllocator.TargetNotPositionManager.selector, INTENT_ID, true));
+    vm.prank(executor);
+    allocator.runInKind(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 1_000e6, 700e6, true);
+  }
+
+  function test_runInKind_revertsWhenNotExecutor() public {
+    _configureIntentWithTargetPm();
+
+    vm.expectRevert(Ownable.Unauthorized.selector);
+    vm.prank(stranger);
+    allocator.runInKind(INTENT_ID, _deals(500e6, WAD), allocAdapter, targetMarket, 1_000e6, 700e6, true);
   }
 
   /*========== multiple intents ==========*/

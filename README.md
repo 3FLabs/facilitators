@@ -34,9 +34,11 @@ Two facilitators exist today, covering the two ends of a fund DEPOSIT order's li
 
 Success emits `Allocated(intentId, unlocked, allocateAdapter, gatheredTotal, borrowAmount)`.
 
+`runInKind(intentId, deallocations, allocateAdapter, allocateMarket, depositAmount, borrowAmount, useTarget)` serves in-kind deposit intents, where the depositor supplied the PositionManager's collateral directly to the intent and there is no fund order to unlock. It runs steps 1, 3 and 4 above (PositionManager check, vault rebalance, `depositManager` with the given `depositAmount`) and skips the unlock, order-state and slippage checks. It emits the same `Allocated` event with `unlocked = depositAmount`.
+
 ## Roles & trust assumptions
 
-- **Owner / executor.** Both contracts use Solady `OwnableRoles`. The owner (set at initialization) grants and revokes `EXECUTOR_ROLE`; only executors can call `run`. Executors are trusted operators: parameters like the pull/commit split, `depositAmount`, and the rebalance shape are their judgment calls — the contracts enforce invariants (order states, slippage minima, utilisation caps, balance audits), not strategy.
+- **Owner / executor.** Both contracts use Solady `OwnableRoles`. The owner (set at initialization) grants and revokes `EXECUTOR_ROLE`; only executors can call `run` (and `MorphoAllocator.runInKind`). Executors are trusted operators: parameters like the pull/commit split, `depositAmount`, and the rebalance shape are their judgment calls — the contracts enforce invariants (order states, slippage minima, utilisation caps, balance audits), not strategy.
 - **External grants.** The Facility owner must grant each script `FACILITATOR_ROLE`; the Vault V2 curator must additionally whitelist `MorphoAllocator` as an allocator.
 - **Atomicity.** Every `run` is all-or-nothing: any failed assertion reverts the entire sequence, leaving the protocol in its prior state so the executor can adjust parameters and retry.
 - **Deployment.** Both contracts are proxy-ready: Solady `Initializable` with locked implementations and ERC-7201 namespaced storage. Initialization validates the owner is non-zero and that the Facility (and Morpho Vault) addresses have code.

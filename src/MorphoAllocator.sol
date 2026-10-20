@@ -20,7 +20,8 @@ import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 /// @author 3F Protocol
 /// @notice Grunt Smart Facilitator script: unlocks a matured fund DEPOSIT order, rebalances Morpho
 ///         Vault V2 liquidity (deallocating from source markets or idle and allocating the total
-///         into one market), and runs `Facility.depositManager`.
+///         into one market), and runs `Facility.depositManager`. `runInKind` does the same for in-kind
+///         deposit intents, which hold the collateral directly and have no fund order to unlock.
 /// @dev Must hold `FACILITATOR_ROLE` on the target Facility and `isAllocator = true` on the
 ///      target Morpho Vault V2. Proxy-ready via Solady `Initializable` and ERC-7201 namespaced
 ///      storage. The committed DEPOSIT order may have been created by any facilitator (e.g. the
@@ -32,7 +33,7 @@ contract MorphoAllocator is OwnableRoles, Initializable {
   /*                           STRUCTS                          */
   /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
 
-  /// @notice A single source from which `run` gathers liquidity before allocating the total.
+  /// @notice A single source from which `run`/`runInKind` gathers liquidity before allocating the total.
   /// @dev `adapter == address(0)` means `amount` is taken from the vault's idle liquidity: no
   ///      `deallocate` call is made and `marketParams`/`maxUtilisation` are ignored. Otherwise the
   ///      Morpho Vault V2 `deallocate(adapter, abi.encode(marketParams), amount)` withdraws `amount`
@@ -52,18 +53,20 @@ contract MorphoAllocator is OwnableRoles, Initializable {
   /*                           ROLES                            */
   /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
 
-  /// @notice Role for addresses authorized to trigger the `run` workflow.
+  /// @notice Role for addresses authorized to trigger the `run` and `runInKind` workflows.
   uint256 internal constant EXECUTOR_ROLE = _ROLE_0;
 
   /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
   /*                          EVENTS                            */
   /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
 
-  /// @notice Emitted when `run` (unlock + deallocate + allocate + depositManager) succeeds.
+  /// @notice Emitted when `run` (unlock + deallocate + allocate + depositManager) or `runInKind`
+  ///         (deallocate + allocate + depositManager) succeeds.
   /// @param intentId        The intent ID.
-  /// @param unlocked        The amount of collateral credited to the intent by `unlock`, deposited in
-  ///                        full via `Facility.depositManager`.
-  /// @param allocateAdapter The destination adapter as passed to `run`; address(0) when no allocation
+  /// @param unlocked        The amount of collateral deposited via `Facility.depositManager`: for `run`,
+  ///                        the amount credited to the intent by `unlock` (deposited in full); for
+  ///                        `runInKind`, the executor-supplied `depositAmount` (nothing is unlocked).
+  /// @param allocateAdapter The destination adapter as passed in; address(0) when no allocation
   ///                        was requested. Allocation is also skipped when `gatheredTotal` is 0.
   /// @param gatheredTotal   The total gathered across all deallocation sources. Allocated into
   ///                        `allocateAdapter` when both it and the total are non-zero; otherwise the
@@ -268,6 +271,45 @@ contract MorphoAllocator is OwnableRoles, Initializable {
     _facility.depositManager(intentId, unlocked, borrowAmount, useTarget);
 
     emit Allocated(intentId, unlocked, allocateAdapter, gatheredTotal, borrowAmount);
+  }
+
+  /// @notice Rebalance Morpho Vault V2 liquidity, then deposit collateral the intent already holds and
+  ///         borrow. For in-kind deposit intents: the depositor supplied the PositionManager's collateral
+  ///         directly to the intent, so there is no fund order to unlock.
+  /// @dev Atomic sequence: deallocate each source market (validating post-withdrawal utilisation) →
+  ///      `MorphoVaultV2.allocate` of the gathered total (skipped when `allocateAdapter == address(0)`)
+  ///      → `Facility.depositManager`. Unlike `run`, there is no unlock, order-state check or unlock
+  ///      slippage guard; `depositAmount` is deposited as given and the Facility enforces that the
+  ///      intent holds it. Emits `Allocated` with `unlocked = depositAmount`.
+  /// @param intentId        The intent ID.
+  /// @param deallocations   Sources to gather liquidity from (markets and/or idle); see {Deallocation}.
+  /// @param allocateAdapter Destination Morpho V1 Market adapter, or address(0) to skip allocation.
+  /// @param allocateMarket  Destination market identifier (ignored when `allocateAdapter == address(0)`).
+  /// @param depositAmount   Collateral to deposit via `Facility.depositManager`.
+  /// @param borrowAmount    Amount to borrow via `Facility.depositManager`.
+  /// @param useTarget       True to use the intent's target asset as the PositionManager,
+  ///                        false to use the deposit asset.
+  function runInKind(
+    uint256 intentId,
+    Deallocation[] calldata deallocations,
+    address allocateAdapter,
+    MarketParams calldata allocateMarket,
+    uint256 depositAmount,
+    uint256 borrowAmount,
+    bool useTarget
+  ) external onlyRoles(EXECUTOR_ROLE) {
+    MorphoAllocatorStorage storage $ = _allocatorStorage();
+    IFacility _facility = $.facility;
+
+    (IntentProperties memory props,,,) = _facility.getIntent(intentId);
+    Asset memory pmAsset = useTarget ? props.targetAsset : props.depositAsset;
+    if (!pmAsset.isPositionManager) revert TargetNotPositionManager(intentId, useTarget);
+
+    uint256 gatheredTotal = _rebalance($.morphoVault, deallocations, allocateAdapter, allocateMarket);
+
+    _facility.depositManager(intentId, depositAmount, borrowAmount, useTarget);
+
+    emit Allocated(intentId, depositAmount, allocateAdapter, gatheredTotal, borrowAmount);
   }
 
   /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
