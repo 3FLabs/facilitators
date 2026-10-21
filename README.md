@@ -44,7 +44,7 @@ Success emits `Allocated(intentId, unlocked, allocateAdapter, gatheredTotal, bor
 
 ```text
 MorphoAllocator (proxy):          0xb8947d2725D3E9De9b19fC720f053300c50981e5
-MorphoAllocator (implementation): 0x4372540f89Ef3a83eB83365C508C4fb775fA449F
+MorphoAllocator (implementation): 0x18dDAc7D9047835aFDA2e4f55B1bB65752d16C14
 ```
 
 To ship a new implementation, `script/DeployMorphoAllocatorImpl.s.sol` deploys it and prints the `ERC1967Factory.upgrade(proxy, impl)` calldata. The proxy admin (`0xA9F5262c1aa97C6E519D6f8837658C8f9979bA24`) must execute that call; the script only simulates it on the fork.
