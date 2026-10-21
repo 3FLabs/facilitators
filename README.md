@@ -40,10 +40,10 @@ Success emits `Allocated(intentId, unlocked, allocateAdapter, gatheredTotal, bor
 
 ### Deployment
 
-`script/DeployMorphoAllocator.s.sol` deploys the implementation and an ERC1967 proxy through the Solady canonical `ERC1967Factory` (`0x0000000000006396FF2a80c067f99B3d2Ab4Df24`). Ethereum mainnet:
+The live Ethereum mainnet proxy was deployed by `script/DeployAllocators.s.sol` through the `ERC1967Factory` at `0x54F862fa0612A8709F6Dec4A7B39AF015CD4E82E`, which is the only factory able to upgrade it (not the Solady canonical `0x0000000000006396FF2a80c067f99B3d2Ab4Df24`):
 
 ```text
-MorphoAllocator (proxy):          0xb8947d2725D3E9De9b19fC720f053300c50981e5
+MorphoAllocator (proxy):          0x9BDcb584a2304e394705932c8b67114E3908241f
 MorphoAllocator (implementation): 0x18dDAc7D9047835aFDA2e4f55B1bB65752d16C14
 ```
 

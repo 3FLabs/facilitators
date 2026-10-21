@@ -26,11 +26,12 @@ contract DeployMorphoAllocatorImpl is Script {
   /*                         ADDRESSES                          */
   /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
 
-  /// @notice Solady ERC1967Factory the proxy was deployed through.
-  IERC1967Factory internal constant FACTORY = IERC1967Factory(0x0000000000006396FF2a80c067f99B3d2Ab4Df24);
+  /// @notice ERC1967Factory the live proxy was deployed through (by `DeployAllocators`). Only this
+  ///         factory can upgrade it — NOT the Solady canonical `0x0000000000006396FF2a80c067f99B3d2Ab4Df24`.
+  IERC1967Factory internal constant FACTORY = IERC1967Factory(0x54F862fa0612A8709F6Dec4A7B39AF015CD4E82E);
 
-  /// @notice Live MorphoAllocator proxy on mainnet.
-  address internal constant PROXY = 0xb8947d2725D3E9De9b19fC720f053300c50981e5;
+  /// @notice Live MorphoAllocator proxy on mainnet (whitelisted as allocator on the Morpho Vault V2).
+  address internal constant PROXY = 0x9BDcb584a2304e394705932c8b67114E3908241f;
 
   /// @notice ERC1967 proxy upgrade admin (3F_ADMIN_PROTECTED); the only address allowed to upgrade
   ///         the proxy through the factory.
