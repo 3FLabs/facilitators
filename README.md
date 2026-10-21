@@ -1,6 +1,6 @@
 # Facilitators
 
-Smart Facilitator scripts for the Grunt Protocol. Each contract in `src/` is a permissioned automation script that holds `FACILITATOR_ROLE` on a Grunt Facility and executes one multi-step phase of an intent's deposit lifecycle atomically: either every step succeeds, or the whole call reverts and can be retried.
+Smart Facilitator scripts for the Grunt Protocol. The facilitator contracts in `src/` are permissioned automation scripts that hold `FACILITATOR_ROLE` on a Grunt Facility and execute phases of an intent's deposit lifecycle atomically: either every step succeeds, or the whole call reverts and can be retried.
 
 Two facilitators exist today, covering the two ends of a fund DEPOSIT order's life:
 
@@ -8,6 +8,8 @@ Two facilitators exist today, covering the two ends of a fund DEPOSIT order's li
 |---|---|---|
 | `CommitDeposit` | Order creation | pull bridge funds → create DEPOSIT order → commit |
 | `MorphoAllocator` | Order maturation | unlock → rebalance Morpho Vault V2 → deposit collateral & borrow |
+
+`src/checks/` additionally holds permissionless, read-only guard contracts meant to be called as the first step of a batch transaction to make the rest of the batch revert on stale state; they hold no roles and no storage.
 
 ## CommitDeposit (`src/CommitDeposit.sol`)
 
@@ -35,6 +37,27 @@ Two facilitators exist today, covering the two ends of a fund DEPOSIT order's li
 Success emits `Allocated(intentId, unlocked, allocateAdapter, gatheredTotal, borrowAmount)`.
 
 `runInKind(intentId, deallocations, allocateAdapter, allocateMarket, depositAmount, borrowAmount, useTarget)` serves in-kind deposit intents, where the depositor supplied the PositionManager's collateral directly to the intent and there is no fund order to unlock. It runs steps 1, 3 and 4 above (PositionManager check, vault rebalance, `depositManager` with the given `depositAmount`) and skips the unlock, order-state and slippage checks. It emits the same `Allocated` event with `unlocked = depositAmount`.
+
+## DepositCapStateGuard (`src/checks/DepositCapStateGuard.sol`)
+
+`requireState(facility, checks)` — a stateless, read-only guard that reverts unless every intent in `checks` matches the caller's expectations:
+
+- **Deposit cap** must equal `expectedCap` exactly (`StaleCap` otherwise) — cap changes are precisely the state transitions the guard exists to catch.
+- **Total supply** must lie within the inclusive `[minSupply, maxSupply]` range (`SupplyOutOfRange` otherwise), so benign concurrent deposits/withdrawals inside the tolerated band do not fail the batch. Pass `minSupply == maxSupply` for an exact check; an inverted range reverts with `InvalidSupplyRange`.
+
+**Usage: this contract must be called as the FIRST transaction of a batch** (e.g. an EIP-7702 batch) executed in the mode where any failing call reverts the whole batch. The batch calls this read-only function first; if the on-chain cap/supply state no longer matches what was expected when the batch was signed, the guard reverts and the rest of the batch reverts with it, so no state-changing call executes against stale state.
+
+The guard is unpermissioned (anyone may call it with any arguments), holds no storage, and takes the Facility as a call parameter, so one deployment serves any Facility.
+
+### Deployment
+
+`script/DeployDepositCapStateGuard.s.sol` deploys the guard through the canonical CREATE2 factory (`0x4e59b44847b379578588920cA78FbF26c0B4956C`) with a salt ground for a `0x3fa77e57` ("3F ATTEST") vanity prefix, giving the same address on every chain:
+
+```text
+DepositCapStateGuard: 0x3Fa77E57baC28940621d1aaE1a136058c4064623
+```
+
+The script restores the metadata digest used by the already deployed init code, verifies its full hash, and checks that code exists at this address after deployment. This keeps the address stable when only compiler metadata changes. Executable-code changes require a new deployment address and updated integrations.
 
 ## Roles & trust assumptions
 

@@ -36,3 +36,6 @@ jobs:
 
       - name: Run Forge tests
         run: forge test -vvv
+
+      - name: Verify deterministic guard deployment
+        run: forge script script/DeployDepositCapStateGuard.s.sol
