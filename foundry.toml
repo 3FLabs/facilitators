@@ -66,8 +66,6 @@ evm_version = "paris"
 # version group as its own 0.8.38 (pragma mismatches are warning 5333) but keeps each group's evm_version and
 # optimizer settings, so Morpho Blue / the IRM still target paris. Deployments stay on solc.
 [profile.solar]
-# Not version-pinned here: forge has no installer for Solar and runs the `solar` on PATH (bundled
-# with Foundry). CI checks the exact build via SOLAR_VERSION in .github/workflows/test.yml.
 solc_version = "solar"
 
 [lint]
