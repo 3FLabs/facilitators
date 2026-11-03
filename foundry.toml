@@ -62,6 +62,12 @@ name = "999999-paris"
 optimizer_runs = 999999
 evm_version = "paris"
 
+# Local Solar runs: `forge test --profile solar` (same as `forge test --use solar`). Solar compiles every
+# version group as its own 0.8.38 (pragma mismatches are warning 5333) but keeps each group's evm_version and
+# optimizer settings, so Morpho Blue / the IRM still target paris. Deployments stay on solc.
+[profile.solar]
+solc_version = "solar"
+
 [lint]
 # `forge build` runs the linter, which needs each source's AST. The test/imports/*Import.sol shims only
 # force Morpho / Adaptive Curve IRM (solc 0.8.19) to compile so `deployCode` resolves them; they build in
