@@ -38,6 +38,17 @@ Success emits `Allocated(intentId, unlocked, allocateAdapter, gatheredTotal, bor
 
 `runInKind(intentId, deallocations, allocateAdapter, allocateMarket, depositAmount, borrowAmount, useTarget)` serves in-kind deposit intents, where the depositor supplied the PositionManager's collateral directly to the intent and there is no fund order to unlock. It runs steps 1, 3 and 4 above (PositionManager check, vault rebalance, `depositManager` with the given `depositAmount`) and skips the unlock, order-state and slippage checks. It emits the same `Allocated` event with `unlocked = depositAmount`.
 
+### Deployment
+
+The live Ethereum mainnet proxy was deployed by `script/DeployAllocators.s.sol` through the `ERC1967Factory` at `0x54F862fa0612A8709F6Dec4A7B39AF015CD4E82E`, which is the only factory able to upgrade it (not the Solady canonical `0x0000000000006396FF2a80c067f99B3d2Ab4Df24`):
+
+```text
+MorphoAllocator (proxy):          0x9BDcb584a2304e394705932c8b67114E3908241f
+MorphoAllocator (implementation): 0x18dDAc7D9047835aFDA2e4f55B1bB65752d16C14
+```
+
+To ship a new implementation, `script/DeployMorphoAllocatorImpl.s.sol` deploys it and prints the `ERC1967Factory.upgrade(proxy, impl)` calldata. The proxy admin (`0xA9F5262c1aa97C6E519D6f8837658C8f9979bA24`) must execute that call; the script only simulates it on the fork.
+
 ## DepositCapStateGuard (`src/checks/DepositCapStateGuard.sol`)
 
 `requireState(facility, checks)` — a stateless, read-only guard that reverts unless every intent in `checks` matches the caller's expectations:

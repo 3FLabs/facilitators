@@ -61,8 +61,9 @@ contract DeployAllocators is Script {
   /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
 
   /// @notice Deploys and initializes both allocators behind ERC1967 proxies.
+  /// @dev Broadcasts with the key from the `PRIVATE_KEY` env var (hex, `0x`-prefixed).
   function run() external {
-    vm.startBroadcast();
+    vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
 
     CommitDeposit commitImpl = new CommitDeposit();
     address commitProxy = FACTORY.deployAndCall(
